@@ -20,6 +20,7 @@ import data_processor
 
 __all__ = [
     "DB_PATH",
+    "SAFE_ORDER_BY_OPTIONS",
     "get_db",
     "init_db",
     "insert_leads_from_df",
@@ -31,6 +32,14 @@ __all__ = [
     "get_dashboard_metrics",
     "reset_database",
 ]
+
+# Predefined safe order options to avoid SQL injection
+SAFE_ORDER_BY_OPTIONS: Dict[str, str] = {
+    "id_asc": "id ASC",
+    "id_desc": "id DESC",
+    "score_desc": "lead_score DESC, id ASC",
+    "score_asc": "lead_score ASC, id ASC",
+}
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leads.db")
 
@@ -256,11 +265,31 @@ def mark_lead_failed(lead_id: int, error_msg: str, db_path: str = DB_PATH) -> No
         conn.commit()
 
 
-def get_all_leads(db_path: str = DB_PATH) -> pd.DataFrame:
-    """Retrieves all leads from the database as a Pandas DataFrame."""
+def get_all_leads(order_by: str = "id_asc", db_path: str = DB_PATH) -> pd.DataFrame:
+    """
+    Retrieves all leads from the database as a Pandas DataFrame.
+
+    Args:
+        order_by: Predefined safe sort order. Allowed options:
+                  'id_asc' (default) -> ORDER BY id ASC
+                  'score_desc'       -> ORDER BY lead_score DESC, id ASC
+                  'id_desc'          -> ORDER BY id DESC
+                  'score_asc'        -> ORDER BY lead_score ASC, id ASC
+                  Any unlisted option falls back safely to 'id_asc'.
+        db_path: Path to SQLite database.
+    """
     init_db(db_path)
+    # Whitelist validation to completely avoid SQL injection
+    normalized_order = str(order_by).strip().lower()
+    if normalized_order in SAFE_ORDER_BY_OPTIONS:
+        clause = SAFE_ORDER_BY_OPTIONS[normalized_order]
+    elif order_by in ("id ASC", "lead_score DESC, id ASC"):
+        clause = order_by
+    else:
+        clause = "id ASC"
+
     with get_db(db_path) as conn:
-        df = pd.read_sql_query("SELECT * FROM leads ORDER BY lead_score DESC, id ASC", conn)
+        df = pd.read_sql_query(f"SELECT * FROM leads ORDER BY {clause}", conn)
         return df
 
 

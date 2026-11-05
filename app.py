@@ -418,7 +418,7 @@ with tab_leads:
         "Inspect categorized business leads, review explainable score breakdowns, and verify the original source text."
     )
 
-    all_leads_df = database.get_all_leads()
+    all_leads_df = database.get_all_leads(order_by="score_desc")
 
     if all_leads_df.empty:
         st.info("No leads found in database. Ingest leads in 'Input Data Collection' first.")
@@ -566,7 +566,7 @@ with tab_export:
         horizontal=True,
     )
 
-    base_df = database.get_all_leads()
+    base_df = database.get_all_leads(order_by="id_asc")
 
     if base_df.empty:
         st.warning("Database contains no leads to export.")
@@ -577,6 +577,9 @@ with tab_export:
             export_df = base_df[base_df["priority"] == "High"].copy()
         else:
             export_df = base_df.copy()
+
+        # Enforce ascending database ID order (1 to 24) across all export scopes
+        export_df = export_df.sort_values(by="id", ascending=True).reset_index(drop=True)
 
         st.write(f"Export dataset contains **{len(export_df)}** records.")
 

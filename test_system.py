@@ -246,25 +246,69 @@ def test_model_configuration():
 
 
 def test_exports():
-    print("--> Testing exports...")
-    df = pd.DataFrame([
-        {
-            "business_name": "Test Co (Demo)",
-            "category": "Website Development",
-            "lead_score": 85,
-            "priority": "High",
-        }
-    ])
-    # CSV
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    assert len(csv_bytes) > 0
+    print("--> Testing exports and sequential ID ordering...")
 
-    # Excel
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False)
-    assert len(buf.getvalue()) > 0
-    print("    [PASS] export tests passed.")
+    # 1. Test database.get_all_leads safe predefined sort options and SQL injection defense
+    all_id_asc = database.get_all_leads(order_by="id_asc")
+    assert not all_id_asc.empty, "Database should have leads"
+    assert list(all_id_asc["id"]) == sorted(list(all_id_asc["id"])), "id_asc must be strictly sorted by ID ascending"
+
+    all_score_desc = database.get_all_leads(order_by="score_desc")
+    scores = list(all_score_desc["lead_score"])
+    assert scores == sorted(scores, reverse=True), "score_desc must sort by lead_score descending"
+
+    # Malicious SQL injection attempt must fall back safely to id ASC
+    injection_attempt = database.get_all_leads(order_by="id_asc; DROP TABLE leads;--")
+    assert not injection_attempt.empty
+    assert list(injection_attempt["id"]) == sorted(list(injection_attempt["id"]))
+
+    # 2. Test all three export scopes for ascending ID order in both CSV and Excel
+    export_scopes = [
+        "All Leads in Database",
+        "Relevant Opportunities Only",
+        "High Priority Leads Only (Score 80-100)",
+    ]
+
+    base_df = database.get_all_leads(order_by="id_asc")
+    assert len(base_df) == 24, f"Expected 24 total leads in database, got {len(base_df)}"
+
+    for scope in export_scopes:
+        if scope == "Relevant Opportunities Only":
+            export_df = base_df[base_df["relevance"] == "Relevant"].copy()
+        elif scope == "High Priority Leads Only (Score 80-100)":
+            export_df = base_df[base_df["priority"] == "High"].copy()
+        else:
+            export_df = base_df.copy()
+
+        # Enforce ascending database ID order
+        export_df = export_df.sort_values(by="id", ascending=True).reset_index(drop=True)
+
+        if scope == "All Leads in Database":
+            assert len(export_df) == 24, "All Leads export must contain all 24 records"
+            assert list(export_df["id"]) == list(range(1, 25)), "All Leads IDs must be sequential 1 to 24"
+
+        # Verify CSV export
+        csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+        assert len(csv_bytes) > 0
+        csv_df = pd.read_csv(io.BytesIO(csv_bytes))
+        assert list(csv_df["id"]) == sorted(list(csv_df["id"])), f"CSV export for {scope} must have ascending IDs"
+        assert "lead_score" in csv_df.columns
+        assert "priority" in csv_df.columns
+        assert "business_name" in csv_df.columns
+
+        # Verify Excel export
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            export_df.to_excel(writer, index=False, sheet_name="Leads")
+        excel_bytes = buf.getvalue()
+        assert len(excel_bytes) > 0
+        excel_df = pd.read_excel(io.BytesIO(excel_bytes))
+        assert list(excel_df["id"]) == sorted(list(excel_df["id"])), f"Excel export for {scope} must have ascending IDs"
+        assert "lead_score" in excel_df.columns
+        assert "priority" in excel_df.columns
+        assert "business_name" in excel_df.columns
+
+    print("    [PASS] export and sequential ID ordering tests passed.")
 
 
 if __name__ == "__main__":
