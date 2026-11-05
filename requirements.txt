@@ -1,0 +1,7 @@
+# AI Lead Business Discovery System Dependencies
+# Compatible with Python 3.10, 3.11, 3.12, 3.13
+streamlit>=1.40.0
+google-genai>=1.0.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-dotenv>=1.0.0
