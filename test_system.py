@@ -169,6 +169,11 @@ def test_ai_error_handling():
 
 def test_auto_seed():
     print("--> Testing automatic demo lead seeding on empty database...")
+    # 0. Check function exposure and signature
+    assert hasattr(database, "seed_demo_leads_if_empty"), "database module must expose 'seed_demo_leads_if_empty'"
+    assert callable(database.seed_demo_leads_if_empty), "'seed_demo_leads_if_empty' must be callable"
+    assert "seed_demo_leads_if_empty" in database.__all__, "'seed_demo_leads_if_empty' must be in database.__all__"
+
     empty_test_db = "temp_empty_seed_test.db"
     if os.path.exists(empty_test_db):
         os.remove(empty_test_db)
@@ -187,6 +192,13 @@ def test_auto_seed():
         assert ins2 == 0 and skp2 == 0, f"Expected (0, 0) on second run, got ({ins2}, {skp2})"
         metrics2 = database.get_dashboard_metrics(db_path=empty_test_db)
         assert metrics2["total_records"] == 24, "Record count must remain 24"
+
+        # 3. Test non-existent CSV path returns (0, 0) safely without exception
+        ins3, skp3 = database.seed_demo_leads_if_empty(csv_path="non_existent_demo.csv", db_path="temp_non_existent.db")
+        assert ins3 == 0 and skp3 == 0
+        if os.path.exists("temp_non_existent.db"):
+            os.remove("temp_non_existent.db")
+
         print("    [PASS] auto-seed tests passed.")
     finally:
         if os.path.exists(empty_test_db):

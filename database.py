@@ -16,6 +16,21 @@ import os
 import json
 import contextlib
 import pandas as pd
+import data_processor
+
+__all__ = [
+    "DB_PATH",
+    "get_db",
+    "init_db",
+    "insert_leads_from_df",
+    "seed_demo_leads_if_empty",
+    "get_unprocessed_leads",
+    "update_lead_analysis",
+    "mark_lead_failed",
+    "get_all_leads",
+    "get_dashboard_metrics",
+    "reset_database",
+]
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leads.db")
 
@@ -156,7 +171,6 @@ def seed_demo_leads_if_empty(csv_path: Optional[str] = None, db_path: str = DB_P
         return 0, 0
 
     try:
-        import data_processor
         is_valid, df, err, _ = data_processor.load_and_validate_csv(csv_path)
         if is_valid and df is not None and not df.empty:
             return insert_leads_from_df(df, db_path=db_path)

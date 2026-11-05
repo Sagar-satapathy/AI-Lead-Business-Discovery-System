@@ -37,7 +37,12 @@ st.set_page_config(
 
 # Initialize database schema and auto-seed demo leads if database is empty
 database.init_db()
-database.seed_demo_leads_if_empty()
+if not hasattr(database, "seed_demo_leads_if_empty"):
+    import importlib
+    importlib.reload(database)
+
+if hasattr(database, "seed_demo_leads_if_empty"):
+    database.seed_demo_leads_if_empty()
 
 # ---------------------------------------------------------
 # Custom Styling
