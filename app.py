@@ -35,8 +35,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Initialize database schema automatically on startup
+# Initialize database schema and auto-seed demo leads if database is empty
 database.init_db()
+database.seed_demo_leads_if_empty()
 
 # ---------------------------------------------------------
 # Custom Styling
@@ -116,21 +117,24 @@ with st.sidebar:
     else:
         st.warning("⚠️ No Gemini API Key detected.\nPlease configure `.env` or paste your key above.")
 
+    configured_model = ai_analyzer.get_configured_model()
+    model_options = [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "custom",
+    ]
+    default_model_idx = model_options.index(configured_model) if configured_model in model_options else 0
     model_option = st.selectbox(
         "Gemini Model:",
-        options=[
-            "gemini-3.8-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.6-flash",
-            "gemini-3.7-flash",
-            "custom",
-        ],
-        index=0,
+        options=model_options,
+        index=default_model_idx,
         help="Select the Gemini model. gemini-3.8-flash is preferred; if it experiences high demand or quota limits, gemini-3.5-flash is an active alternative.",
     )
     if model_option == "custom":
-        custom_model = st.text_input("Enter custom model name:", value="gemini-3.8-flash")
+        custom_model = st.text_input("Enter custom model name:", value=configured_model)
         active_model = custom_model.strip()
     else:
         active_model = model_option

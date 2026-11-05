@@ -167,6 +167,72 @@ def test_ai_error_handling():
     print("    [PASS] AI error handling tests passed.")
 
 
+def test_auto_seed():
+    print("--> Testing automatic demo lead seeding on empty database...")
+    empty_test_db = "temp_empty_seed_test.db"
+    if os.path.exists(empty_test_db):
+        os.remove(empty_test_db)
+
+    try:
+        # 1. Initialize and auto-seed on empty database
+        inserted, skipped = database.seed_demo_leads_if_empty(db_path=empty_test_db)
+        assert inserted == 24, f"Expected 24 demo leads seeded on empty db, got {inserted}"
+        assert skipped == 0
+
+        metrics = database.get_dashboard_metrics(db_path=empty_test_db)
+        assert metrics["total_records"] == 24, f"Expected total_records 24, got {metrics['total_records']}"
+
+        # 2. Re-run seed on non-empty database -> should not duplicate
+        ins2, skp2 = database.seed_demo_leads_if_empty(db_path=empty_test_db)
+        assert ins2 == 0 and skp2 == 0, f"Expected (0, 0) on second run, got ({ins2}, {skp2})"
+        metrics2 = database.get_dashboard_metrics(db_path=empty_test_db)
+        assert metrics2["total_records"] == 24, "Record count must remain 24"
+        print("    [PASS] auto-seed tests passed.")
+    finally:
+        if os.path.exists(empty_test_db):
+            os.remove(empty_test_db)
+
+
+def test_model_configuration():
+    print("--> Testing Gemini model configuration precedence...")
+    import streamlit as st
+
+    old_model_env = os.environ.get("GEMINI_MODEL")
+    try:
+        if "GEMINI_MODEL" in os.environ:
+            del os.environ["GEMINI_MODEL"]
+
+        # 1. When no secrets and no env, should return default 'gemini-3.8-flash'
+        default_res = ai_analyzer.get_configured_model()
+        assert default_res == "gemini-3.8-flash", f"Expected 'gemini-3.8-flash', got '{default_res}'"
+
+        # 2. Test when GEMINI_MODEL env var is set
+        os.environ["GEMINI_MODEL"] = "gemini-3.5-flash"
+        env_res = ai_analyzer.get_configured_model()
+        assert env_res == "gemini-3.5-flash", f"Expected 'gemini-3.5-flash', got '{env_res}'"
+
+        # 3. Test when Streamlit Secrets is present (mocking secrets)
+        class MockSecrets(dict):
+            def __getattr__(self, name):
+                return self.get(name)
+
+        orig_secrets = getattr(st, "secrets", None)
+        try:
+            st.secrets = MockSecrets({"GEMINI_MODEL": "gemini-3.6-flash"})
+            secret_res = ai_analyzer.get_configured_model()
+            assert secret_res == "gemini-3.6-flash", f"Expected 'gemini-3.6-flash', got '{secret_res}'"
+        finally:
+            if orig_secrets is not None:
+                st.secrets = orig_secrets
+            elif hasattr(st, "secrets"):
+                delattr(st, "secrets")
+
+        print("    [PASS] model configuration precedence tests passed.")
+    finally:
+        if old_model_env is not None:
+            os.environ["GEMINI_MODEL"] = old_model_env
+
+
 def test_exports():
     print("--> Testing exports...")
     df = pd.DataFrame([
@@ -196,6 +262,8 @@ if __name__ == "__main__":
     test_data_processor()
     test_lead_scoring()
     test_database()
+    test_auto_seed()
+    test_model_configuration()
     test_ai_error_handling()
     test_exports()
     print("==========================================")

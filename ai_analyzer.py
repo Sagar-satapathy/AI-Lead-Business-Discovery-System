@@ -97,8 +97,33 @@ def get_api_key() -> Optional[str]:
 
 
 def get_configured_model() -> str:
-    """Returns the configured model name, defaulting to gemini-3.8-flash."""
-    return os.getenv("GEMINI_MODEL", DEFAULT_MODEL)
+    """
+    Returns the configured Gemini model name.
+
+    Precedence:
+    1. Streamlit Secrets (GEMINI_MODEL) when available.
+    2. Environment variable (GEMINI_MODEL).
+    3. Default model (DEFAULT_MODEL = 'gemini-3.8-flash').
+
+    Handles missing secrets safely and never exposes secrets.
+    """
+    # 1. Check Streamlit Cloud Secrets if available
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "GEMINI_MODEL" in st.secrets:
+            secret_model = st.secrets["GEMINI_MODEL"]
+            if secret_model and str(secret_model).strip():
+                return str(secret_model).strip()
+    except Exception:
+        pass
+
+    # 2. Check environment variable
+    env_model = os.getenv("GEMINI_MODEL")
+    if env_model and env_model.strip():
+        return env_model.strip()
+
+    # 3. Fallback to existing default model
+    return DEFAULT_MODEL
 
 
 # Define Pydantic schema for structured output enforcement

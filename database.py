@@ -125,6 +125,47 @@ def insert_leads_from_df(df: pd.DataFrame, db_path: str = DB_PATH) -> Tuple[int,
     return inserted, skipped
 
 
+def seed_demo_leads_if_empty(csv_path: Optional[str] = None, db_path: str = DB_PATH) -> Tuple[int, int]:
+    """
+    Checks whether the database contains zero lead records.
+    If zero, locates data/sample_leads.csv, validates it using data_processor, and
+    inserts the records using insert_leads_from_df().
+    Does not insert if records already exist.
+    Handles missing CSV files and import errors safely.
+
+    Returns:
+        Tuple of (inserted_count, skipped_count)
+    """
+    init_db(db_path)
+
+    # Check whether the database contains zero lead records
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM leads")
+        record_count = cursor.fetchone()[0]
+
+    # Do not insert records if the database already contains leads
+    if record_count > 0:
+        return 0, 0
+
+    # Locate data/sample_leads.csv
+    if not csv_path:
+        csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sample_leads.csv")
+
+    if not os.path.exists(csv_path):
+        return 0, 0
+
+    try:
+        import data_processor
+        is_valid, df, err, _ = data_processor.load_and_validate_csv(csv_path)
+        if is_valid and df is not None and not df.empty:
+            return insert_leads_from_df(df, db_path=db_path)
+    except Exception as e:
+        print(f"Error auto-seeding demo leads: {e}")
+
+    return 0, 0
+
+
 def get_unprocessed_leads(limit: Optional[int] = None, db_path: str = DB_PATH) -> List[Dict[str, Any]]:
     """
     Fetches leads with status='unprocessed' or status='failed'.
