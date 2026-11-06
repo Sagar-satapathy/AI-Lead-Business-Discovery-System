@@ -28,6 +28,7 @@ __all__ = [
     "get_unprocessed_leads",
     "update_lead_analysis",
     "mark_lead_failed",
+    "mark_leads_as_exported",
     "get_all_leads",
     "get_dashboard_metrics",
     "reset_database",
@@ -86,6 +87,8 @@ def init_db(db_path: str = DB_PATH) -> None:
                 score_explanation TEXT,
                 status TEXT DEFAULT 'unprocessed',
                 error_message TEXT,
+                is_exported INTEGER DEFAULT 0,
+                exported_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 analyzed_at TIMESTAMP
             );
@@ -98,11 +101,20 @@ def init_db(db_path: str = DB_PATH) -> None:
             ON leads(business_name, requirement);
             """
         )
+        # Safe migration for existing databases: ensure is_exported and exported_at columns exist
+        cursor.execute("PRAGMA table_info(leads)")
+        existing_cols = [row[1] for row in cursor.fetchall()]
+        if "is_exported" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN is_exported INTEGER DEFAULT 0")
+        if "exported_at" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN exported_at TIMESTAMP")
+
         # Performance indexes for common filters
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON leads(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON leads(category);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_priority ON leads(priority);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_relevance ON leads(relevance);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_exported ON leads(is_exported);")
         conn.commit()
 
 
@@ -110,6 +122,7 @@ def insert_leads_from_df(df: pd.DataFrame, db_path: str = DB_PATH) -> Tuple[int,
     """
     Inserts validated leads from a DataFrame into SQLite.
     Skips rows that already exist based on the unique index.
+    New leads automatically start with is_exported=0.
 
     Returns:
         Tuple of (inserted_count, skipped_count)
@@ -125,8 +138,8 @@ def insert_leads_from_df(df: pd.DataFrame, db_path: str = DB_PATH) -> Tuple[int,
                 cursor.execute(
                     """
                     INSERT INTO leads (
-                        business_name, requirement, source_name, source_url, location, date_found, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'unprocessed')
+                        business_name, requirement, source_name, source_url, location, date_found, status, is_exported
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'unprocessed', 0)
                     """,
                     (
                         str(row.get("business_name", "")).strip(),
@@ -182,7 +195,15 @@ def seed_demo_leads_if_empty(csv_path: Optional[str] = None, db_path: str = DB_P
     try:
         is_valid, df, err, _ = data_processor.load_and_validate_csv(csv_path)
         if is_valid and df is not None and not df.empty:
-            return insert_leads_from_df(df, db_path=db_path)
+            ins, skp = insert_leads_from_df(df, db_path=db_path)
+            # The 24 demo leads start marked as already exported
+            with get_db(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE leads SET is_exported = 1 WHERE business_name LIKE '%(Demo)%' OR id <= 24"
+                )
+                conn.commit()
+            return ins, skp
     except Exception as e:
         print(f"Error auto-seeding demo leads: {e}")
 
@@ -263,6 +284,28 @@ def mark_lead_failed(lead_id: int, error_msg: str, db_path: str = DB_PATH) -> No
             (error_msg, lead_id),
         )
         conn.commit()
+
+
+def mark_leads_as_exported(lead_ids: List[int], db_path: str = DB_PATH) -> int:
+    """
+    Marks specific lead IDs as exported (is_exported=1, exported_at=CURRENT_TIMESTAMP).
+    Returns the count of rows updated.
+    """
+    if not lead_ids:
+        return 0
+    init_db(db_path)
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in lead_ids)
+        query = f"""
+            UPDATE leads
+            SET is_exported = 1,
+                exported_at = CURRENT_TIMESTAMP
+            WHERE id IN ({placeholders})
+        """
+        cursor.execute(query, lead_ids)
+        conn.commit()
+        return cursor.rowcount
 
 
 def get_all_leads(order_by: str = "id_asc", db_path: str = DB_PATH) -> pd.DataFrame:

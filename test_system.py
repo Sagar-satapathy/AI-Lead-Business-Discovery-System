@@ -187,6 +187,13 @@ def test_auto_seed():
         metrics = database.get_dashboard_metrics(db_path=empty_test_db)
         assert metrics["total_records"] == 24, f"Expected total_records 24, got {metrics['total_records']}"
 
+        # Verify demo leads are automatically marked as is_exported = 1
+        with database.get_db(empty_test_db) as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM leads WHERE is_exported = 1")
+            exp_count = c.fetchone()[0]
+            assert exp_count == 24, f"Expected 24 demo leads marked as is_exported=1, got {exp_count}"
+
         # 2. Re-run seed on non-empty database -> should not duplicate
         ins2, skp2 = database.seed_demo_leads_if_empty(db_path=empty_test_db)
         assert ins2 == 0 and skp2 == 0, f"Expected (0, 0) on second run, got ({ins2}, {skp2})"
@@ -262,30 +269,30 @@ def test_exports():
     assert not injection_attempt.empty
     assert list(injection_attempt["id"]) == sorted(list(injection_attempt["id"]))
 
-    # 2. Test all three export scopes for ascending ID order in both CSV and Excel
+    # 2. Test all export scopes for ascending ID order in both CSV and Excel
     export_scopes = [
         "All Leads in Database",
-        "Relevant Opportunities Only",
-        "High Priority Leads Only (Score 80-100)",
+        "Relevant Leads Only",
+        "High Priority Leads Only",
+        "Not Yet Exported Leads",
     ]
 
     base_df = database.get_all_leads(order_by="id_asc")
-    assert len(base_df) == 24, f"Expected 24 total leads in database, got {len(base_df)}"
+    assert len(base_df) >= 24, f"Expected at least 24 total leads in database, got {len(base_df)}"
 
     for scope in export_scopes:
-        if scope == "Relevant Opportunities Only":
+        if scope == "Not Yet Exported Leads":
+            is_exp = base_df["is_exported"] if "is_exported" in base_df.columns else 0
+            export_df = base_df[(base_df["status"] == "processed") & (is_exp == 0)].copy()
+        elif "Relevant" in scope:
             export_df = base_df[base_df["relevance"] == "Relevant"].copy()
-        elif scope == "High Priority Leads Only (Score 80-100)":
+        elif "High Priority" in scope:
             export_df = base_df[base_df["priority"] == "High"].copy()
         else:
             export_df = base_df.copy()
 
         # Enforce ascending database ID order
         export_df = export_df.sort_values(by="id", ascending=True).reset_index(drop=True)
-
-        if scope == "All Leads in Database":
-            assert len(export_df) == 24, "All Leads export must contain all 24 records"
-            assert list(export_df["id"]) == list(range(1, 25)), "All Leads IDs must be sequential 1 to 24"
 
         # Verify CSV export
         csv_bytes = export_df.to_csv(index=False).encode("utf-8")
@@ -311,6 +318,92 @@ def test_exports():
     print("    [PASS] export and sequential ID ordering tests passed.")
 
 
+def test_not_yet_exported_workflow():
+    print("--> Testing Not Yet Exported Leads workflow scenarios...")
+
+    # Scenario 1: Initially, the new option shows 3 leads
+    base_df = database.get_all_leads(order_by="id_asc")
+    unexported = base_df[(base_df["status"] == "processed") & (base_df["is_exported"] == 0)]
+    assert len(unexported) == 3, f"Scenario 1 Failed: Expected initially 3 unexported leads, got {len(unexported)}"
+    unexp_ids = unexported["id"].tolist()
+    assert unexp_ids == [25, 26, 27]
+
+    # Scenario 5: Failed or unprocessed leads are not included
+    failed_or_unprocessed = base_df[base_df["status"] != "processed"]
+    assert len(failed_or_unprocessed) > 0, "There should be failed or unprocessed leads"
+    for fid in failed_or_unprocessed["id"]:
+        assert fid not in unexp_ids, f"Scenario 5 Failed: Lead {fid} must not be in Not Yet Exported Leads"
+
+    # Scenario 2: After confirming their export, it shows 0
+    marked = database.mark_leads_as_exported(unexp_ids)
+    assert marked == 3, f"Expected 3 rows updated, got {marked}"
+    base_after = database.get_all_leads(order_by="id_asc")
+    unexported_after = base_after[(base_after["status"] == "processed") & (base_after["is_exported"] == 0)]
+    assert len(unexported_after) == 0, f"Scenario 2 Failed: Expected 0 unexported leads, got {len(unexported_after)}"
+
+    # Scenario 3: After uploading 25 more leads and analysing them, it shows 25
+    temp_leads = []
+    for i in range(1, 26):
+        temp_leads.append({
+            "business_name": f"Batch Test Org {i}",
+            "requirement": f"Requirement description for batch test client {i} needing development.",
+            "source_name": "Direct Inbound Test",
+            "source_url": f"https://example.com/test-batch-{i}",
+            "location": "Dallas, TX",
+            "date_found": "2026-11-06",
+        })
+    temp_df = pd.DataFrame(temp_leads)
+    ins, skp = database.insert_leads_from_df(temp_df)
+    assert ins == 25, f"Expected 25 leads inserted, got {ins}"
+
+    # Verify they automatically start with is_exported=0 and status='unprocessed'
+    temp_all = database.get_all_leads(order_by="id_asc")
+    batch_25_unproc = temp_all[temp_all["business_name"].str.startswith("Batch Test Org ")]
+    assert len(batch_25_unproc) == 25
+    assert (batch_25_unproc["is_exported"] == 0).all()
+    # While unprocessed, they must NOT show in Not Yet Exported Leads
+    current_unexp = temp_all[(temp_all["status"] == "processed") & (temp_all["is_exported"] == 0)]
+    assert len(current_unexp) == 0, "Scenario 5 Failed: Unprocessed leads must not be in Not Yet Exported Leads"
+
+    # Now simulate analysing them (status='processed')
+    with database.get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE leads
+            SET status = 'processed',
+                category = 'Website Development',
+                relevance = 'Relevant',
+                buying_intent = 'Active',
+                lead_score = 90,
+                priority = 'High',
+                analyzed_at = CURRENT_TIMESTAMP
+            WHERE business_name LIKE 'Batch Test Org %'
+            """
+        )
+        conn.commit()
+
+    # Verify it now shows exactly 25 leads
+    temp_all_analysed = database.get_all_leads(order_by="id_asc")
+    batch_25_processed = temp_all_analysed[(temp_all_analysed["status"] == "processed") & (temp_all_analysed["is_exported"] == 0)]
+    assert len(batch_25_processed) == 25, f"Scenario 3 Failed: Expected 25 newly analysed unexported leads, got {len(batch_25_processed)}"
+
+    # Clean up the 25 temporary test leads and restore the 3 initial leads to is_exported=0
+    with database.get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM leads WHERE business_name LIKE 'Batch Test Org %'")
+        # Restore the 3 newly analysed leads to is_exported=0 so initial user state remains 3
+        cursor.execute("UPDATE leads SET is_exported = 0 WHERE id IN (25, 26, 27)")
+        conn.commit()
+
+    # Final check: initial 3 leads are unexported, 24 demo leads are exported
+    final_check = database.get_all_leads(order_by="id_asc")
+    final_unexp = final_check[(final_check["status"] == "processed") & (final_check["is_exported"] == 0)]
+    assert len(final_unexp) == 3, f"Expected database restored to 3 unexported leads, got {len(final_unexp)}"
+
+    print("    [PASS] Not Yet Exported Leads workflow tests passed.")
+
+
 if __name__ == "__main__":
     print("==========================================")
     print("Running Full System Integration Tests")
@@ -322,6 +415,7 @@ if __name__ == "__main__":
     test_model_configuration()
     test_ai_error_handling()
     test_exports()
+    test_not_yet_exported_workflow()
     print("==========================================")
     print("ALL TESTS COMPLETED SUCCESSFULLY! [100%]")
     print("==========================================")

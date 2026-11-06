@@ -562,7 +562,12 @@ with tab_export:
 
     export_scope = st.radio(
         "Select Export Dataset:",
-        ["All Leads in Database", "Relevant Opportunities Only", "High Priority Leads Only (Score 80-100)"],
+        [
+            "All Leads in Database",
+            "Relevant Leads Only",
+            "High Priority Leads Only",
+            "Not Yet Exported Leads",
+        ],
         horizontal=True,
     )
 
@@ -571,50 +576,81 @@ with tab_export:
     if base_df.empty:
         st.warning("Database contains no leads to export.")
     else:
-        if export_scope == "Relevant Opportunities Only":
+        if export_scope == "Not Yet Exported Leads":
+            is_exp_col = base_df["is_exported"] if "is_exported" in base_df.columns else 0
+            export_df = base_df[(base_df["status"] == "processed") & (is_exp_col == 0)].copy()
+        elif "Relevant" in export_scope:
             export_df = base_df[base_df["relevance"] == "Relevant"].copy()
-        elif export_scope == "High Priority Leads Only (Score 80-100)":
+        elif "High Priority" in export_scope:
             export_df = base_df[base_df["priority"] == "High"].copy()
         else:
             export_df = base_df.copy()
 
-        # Enforce ascending database ID order (1 to 24) across all export scopes
+        # Enforce ascending database ID order across all export scopes
         export_df = export_df.sort_values(by="id", ascending=True).reset_index(drop=True)
 
         st.write(f"Export dataset contains **{len(export_df)}** records.")
 
-        # Data preview
-        export_preview_cols = [
-            "business_name", "category", "buying_intent", "lead_score", "priority", "location", "source_name"
-        ]
-        available_cols = [c for c in export_preview_cols if c in export_df.columns]
-        st.dataframe(export_df[available_cols].head(5), use_container_width=True)
+        if export_df.empty:
+            if export_scope == "Not Yet Exported Leads":
+                st.info("ℹ️ All analysed leads have already been marked as exported. No new unexported leads found.")
+            else:
+                st.warning("Database contains no leads matching the selected export scope.")
+        else:
+            # Data preview
+            export_preview_cols = [
+                "business_name", "category", "buying_intent", "lead_score", "priority", "location", "source_name"
+            ]
+            available_cols = [c for c in export_preview_cols if c in export_df.columns]
+            st.dataframe(export_df[available_cols].head(5), use_container_width=True)
 
-        # Export generation buttons
-        exp_col1, exp_col2 = st.columns(2)
+            # Export generation buttons
+            exp_col1, exp_col2 = st.columns(2)
 
-        # 1. CSV Download
-        csv_buffer = export_df.to_csv(index=False).encode("utf-8")
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
-        with exp_col1:
-            st.download_button(
-                label="📥 Download CSV File",
-                data=csv_buffer,
-                file_name=f"lead_discovery_export_{timestamp_str}.csv",
-                mime="text/csv",
-                type="primary",
-            )
+            # 1. CSV Download
+            csv_buffer = export_df.to_csv(index=False).encode("utf-8")
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
+            with exp_col1:
+                st.download_button(
+                    label="📥 Download CSV File",
+                    data=csv_buffer,
+                    file_name=f"lead_discovery_export_{timestamp_str}.csv",
+                    mime="text/csv",
+                    type="primary",
+                )
 
-        # 2. Excel Download using OpenPyXL
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            export_df.to_excel(writer, index=False, sheet_name="Leads")
-        excel_bytes = excel_buffer.getvalue()
+            # 2. Excel Download using OpenPyXL
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                export_df.to_excel(writer, index=False, sheet_name="Leads")
+            excel_bytes = excel_buffer.getvalue()
 
-        with exp_col2:
-            st.download_button(
-                label="📊 Download Excel Spreadsheet (.xlsx)",
-                data=excel_bytes,
-                file_name=f"lead_discovery_export_{timestamp_str}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            with exp_col2:
+                st.download_button(
+                    label="📊 Download Excel Spreadsheet (.xlsx)",
+                    data=excel_bytes,
+                    file_name=f"lead_discovery_export_{timestamp_str}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+            # Export confirmation action
+            unexported_ids = [
+                int(lid) for lid in export_df[export_df.get("is_exported", 0) == 0]["id"].tolist()
+            ] if "is_exported" in export_df.columns else []
+
+            if unexported_ids:
+                st.markdown("---")
+                st.markdown("##### 📌 Confirm Export Status")
+                st.caption(
+                    "After downloading your CSV or Excel file, confirm below to update their status in the database. "
+                    "Only the leads included in this export will be marked as exported."
+                )
+                if st.button(
+                    f"✅ Mark These {len(unexported_ids)} Leads as Exported",
+                    type="secondary",
+                    help="Updates the database so these records are excluded from future 'Not Yet Exported Leads' downloads.",
+                ):
+                    marked_count = database.mark_leads_as_exported(unexported_ids)
+                    st.success(f"🎉 Successfully marked {marked_count} lead(s) as exported!")
+                    time.sleep(1.2)
+                    st.rerun()
