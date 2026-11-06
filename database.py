@@ -109,6 +109,16 @@ def init_db(db_path: str = DB_PATH) -> None:
         if "exported_at" not in existing_cols:
             cursor.execute("ALTER TABLE leads ADD COLUMN exported_at TIMESTAMP")
 
+        # Idempotent data migration: mark only the original 24 demo records as exported
+        cursor.execute(
+            """
+            UPDATE leads
+            SET is_exported = 1
+            WHERE id BETWEEN 1 AND 24
+              AND is_exported = 0;
+            """
+        )
+
         # Performance indexes for common filters
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON leads(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON leads(category);")
@@ -200,7 +210,12 @@ def seed_demo_leads_if_empty(csv_path: Optional[str] = None, db_path: str = DB_P
             with get_db(db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE leads SET is_exported = 1 WHERE business_name LIKE '%(Demo)%' OR id <= 24"
+                    """
+                    UPDATE leads
+                    SET is_exported = 1
+                    WHERE id BETWEEN 1 AND 24
+                      AND is_exported = 0;
+                    """
                 )
                 conn.commit()
             return ins, skp

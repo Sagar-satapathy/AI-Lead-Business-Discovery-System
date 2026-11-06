@@ -404,6 +404,69 @@ def test_not_yet_exported_workflow():
     print("    [PASS] Not Yet Exported Leads workflow tests passed.")
 
 
+def test_idempotent_demo_migration():
+    print("--> Testing idempotent demo migration for IDs 1-24...")
+    test_mig_db = "temp_migration_test.db"
+    if os.path.exists(test_mig_db):
+        os.remove(test_mig_db)
+
+    try:
+        # Initialize schema
+        database.init_db(test_mig_db)
+
+        # Manually insert 24 demo records and 3 custom user records all with is_exported = 0
+        with database.get_db(test_mig_db) as conn:
+            c = conn.cursor()
+            for i in range(1, 28):
+                bname = f"Demo Company {i}" if i <= 24 else f"Custom Client {i}"
+                c.execute(
+                    """
+                    INSERT INTO leads (id, business_name, requirement, status, is_exported)
+                    VALUES (?, ?, ?, 'processed', 0)
+                    """,
+                    (i, bname, f"Requirement for {i}"),
+                )
+            conn.commit()
+
+            # Confirm all 27 initially have is_exported = 0
+            c.execute("SELECT COUNT(*) FROM leads WHERE is_exported = 0")
+            assert c.fetchone()[0] == 27
+
+        # Run init_db() to trigger migration
+        database.init_db(test_mig_db)
+
+        with database.get_db(test_mig_db) as conn:
+            c = conn.cursor()
+            # Verify records 1-24 are now is_exported = 1
+            c.execute("SELECT COUNT(*) FROM leads WHERE id BETWEEN 1 AND 24 AND is_exported = 1")
+            assert c.fetchone()[0] == 24, "All IDs 1-24 must be marked is_exported = 1"
+
+            # Verify records 25-27 are still is_exported = 0
+            c.execute("SELECT COUNT(*) FROM leads WHERE id > 24 AND is_exported = 0")
+            assert c.fetchone()[0] == 3, "IDs > 24 must remain is_exported = 0"
+
+            # Verify no records were deleted
+            c.execute("SELECT COUNT(*) FROM leads")
+            assert c.fetchone()[0] == 27
+
+        # Run init_db() a second time to ensure idempotency
+        database.init_db(test_mig_db)
+
+        with database.get_db(test_mig_db) as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM leads WHERE id BETWEEN 1 AND 24 AND is_exported = 1")
+            assert c.fetchone()[0] == 24
+            c.execute("SELECT COUNT(*) FROM leads WHERE id > 24 AND is_exported = 0")
+            assert c.fetchone()[0] == 3
+            c.execute("SELECT COUNT(*) FROM leads")
+            assert c.fetchone()[0] == 27
+
+        print("    [PASS] idempotent demo migration tests passed.")
+    finally:
+        if os.path.exists(test_mig_db):
+            os.remove(test_mig_db)
+
+
 if __name__ == "__main__":
     print("==========================================")
     print("Running Full System Integration Tests")
@@ -416,6 +479,7 @@ if __name__ == "__main__":
     test_ai_error_handling()
     test_exports()
     test_not_yet_exported_workflow()
+    test_idempotent_demo_migration()
     print("==========================================")
     print("ALL TESTS COMPLETED SUCCESSFULLY! [100%]")
     print("==========================================")
