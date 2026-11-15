@@ -108,6 +108,18 @@ def init_db(db_path: str = DB_PATH) -> None:
             cursor.execute("ALTER TABLE leads ADD COLUMN is_exported INTEGER DEFAULT 0")
         if "exported_at" not in existing_cols:
             cursor.execute("ALTER TABLE leads ADD COLUMN exported_at TIMESTAMP")
+        if "record_type" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN record_type TEXT DEFAULT 'discovered'")
+        if "verification_status" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN verification_status TEXT DEFAULT 'unverified'")
+        if "source_title" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN source_title TEXT")
+        if "publication_date" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN publication_date TEXT")
+        if "verified_at" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN verified_at TIMESTAMP")
+        if "verification_notes" not in existing_cols:
+            cursor.execute("ALTER TABLE leads ADD COLUMN verification_notes TEXT")
 
         # Idempotent data migration: mark only the original 24 demo records as exported
         cursor.execute(
@@ -119,12 +131,50 @@ def init_db(db_path: str = DB_PATH) -> None:
             """
         )
 
+        # 1. Idempotent classification of demo records (IDs 1-24)
+        cursor.execute(
+            """
+            UPDATE leads
+            SET record_type = 'demo',
+                verification_status = 'demo',
+                verification_notes = 'Pre-seeded demonstration record'
+            WHERE id BETWEEN 1 AND 24
+              AND (record_type IS NULL OR record_type != 'demo' OR verification_status != 'demo');
+            """
+        )
+
+        # 2. Idempotent classification of user uploaded records (IDs 25, 26, 27)
+        cursor.execute(
+            """
+            UPDATE leads
+            SET record_type = 'uploaded',
+                verification_status = 'unverified',
+                verification_notes = 'User-uploaded dataset from sample_leads.csv; unverified'
+            WHERE id IN (25, 26, 27)
+              AND (record_type IS NULL OR record_type != 'uploaded' OR verification_status != 'unverified');
+            """
+        )
+
+        # 3. Idempotent classification of previous test auto-ingested records (IDs > 27)
+        cursor.execute(
+            """
+            UPDATE leads
+            SET record_type = 'sample',
+                verification_status = 'unverified',
+                verification_notes = 'Auto-ingested during previous test from sample directory; unverified source'
+            WHERE id > 27
+              AND (verification_notes IS NULL OR verification_notes = '');
+            """
+        )
+
         # Performance indexes for common filters
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON leads(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON leads(category);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_priority ON leads(priority);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_relevance ON leads(relevance);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_is_exported ON leads(is_exported);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_record_type ON leads(record_type);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_verification_status ON leads(verification_status);")
         conn.commit()
 
 

@@ -23,3 +23,12 @@ env/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Node / Frontend Build Outputs
+node_modules/
+dist/
+dist-ssr/
+*.log
+
+# Test Artifacts
+backend/scripts/*.json

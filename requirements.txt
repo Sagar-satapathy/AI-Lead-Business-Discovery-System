@@ -1,7 +1,21 @@
 # AI Lead Business Discovery System Dependencies
 # Compatible with Python 3.10, 3.11, 3.12, 3.13
+
+# Core Streamlit Application
 streamlit>=1.40.0
+
+# Enterprise FastAPI Backend & Server
+fastapi>=0.110.0
+uvicorn>=0.25.0
+pydantic>=2.6.0
+httpx>=0.27.0
+
+# AI Intelligence & Providers
 google-genai>=1.0.0
+
+# Data Processing & Spreadsheet Export
 pandas>=2.0.0
 openpyxl>=3.1.0
+
+# Environment & Secrets Management
 python-dotenv>=1.0.0
