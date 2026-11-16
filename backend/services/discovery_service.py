@@ -552,7 +552,7 @@ def discover_leads(
         if srv_clean:
             query_desc.append(f"service '{srv_clean}'")
         criteria_str = ", ".join(query_desc) if query_desc else "selected criteria"
-        status_msg = f"No verified opportunities found matching {criteria_str}."
+        status_msg = f"No matching public opportunities surfaced for {criteria_str} in this search. This does not mean no businesses need the service; try a nearby location or a broader search phrase."
 
     # Determine provider-specific display title and notice
     if live_provider_connected:
