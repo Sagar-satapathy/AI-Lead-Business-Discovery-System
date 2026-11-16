@@ -14,45 +14,35 @@
   "rewrites": [
     {
       "source": "/api",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": {"service": "backend"}
     },
     {
       "source": "/api/(.*)",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": {"service": "backend"}
     },
     {
       "source": "/docs",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": {"service": "backend"}
     },
     {
       "source": "/docs/(.*)",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": {"service": "backend"}
     },
     {
       "source": "/redoc",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": {"service": "backend"}
     },
     {
       "source": "/openapi.json",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": {"service": "backend"}
+    },
+    {
+      "source": "/",
+      "destination": {"service": "frontend"}
     },
     {
       "source": "/(.*)",
-      "destination": {
-        "service": "frontend"
-      }
+      "destination": {"service": "frontend"}
     }
   ]
 }
