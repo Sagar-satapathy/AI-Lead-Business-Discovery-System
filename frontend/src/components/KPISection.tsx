@@ -83,7 +83,7 @@ export const KPISection: React.FC<KPISectionProps> = ({
           </div>
           <div className="kpi-value">{activeIntent}</div>
           <div className="kpi-footer text-muted">
-            <span>Verified RFPs &amp; urgent procurement</span>
+            <span>Classified as active intent; source verification may still be required</span>
           </div>
         </div>
 
