@@ -171,6 +171,10 @@ POTENTIAL_DEMAND_PATTERNS = [
     r"\bpatient\s+portal\s+(development|implementation|redesign)\s+requirement\b",
     r"\bstudent\s+portal\s+(development|implementation|redesign)\s+requirement\b",
     r"\be-commerce\s+(portal|store|website)\s+(development|launch)\s+requirement\b",
+    # Broader, evidence-based commercial demand signals (not limited to published tenders).
+    r"\b(needs?|seeks?|looking\s+to\s+improve|aims?\s+to\s+improve|plans?\s+to\s+improve)\b.{0,90}\b(digital\s+presence|online\s+presence|online\s+visibility|social\s+media|patient\s+outreach|digital\s+marketing|search\s+visibility)\b",
+    r"\b(digital\s+marketing|social\s+media|google\s+ads|seo|search\s+engine\s+optimisation|search\s+engine\s+optimization|online\s+advertising)\b.{0,70}\b(requirement|campaign|initiative|expansion|growth|improve|increase|launch|budget)\b",
+    r"\b(patient\s+acquisition|appointment\s+bookings|online\s+leads|website\s+traffic|brand\s+awareness)\b.{0,70}\b(growth|campaign|marketing|improve|increase|strategy)\b",
 ]
 
 # Industry-specific entity & domain terms
@@ -388,6 +392,15 @@ class MwmblProvider:
         # 5. Entity-specific hiring / engagement query
         if entity_noun:
             queries.append(f"{loc_token} {entity_noun} hiring {srv_core} agency".strip())
+
+        # 6-7. Broader commercial opportunity discovery. These searches surface
+        # organisations discussing a business need even when no formal RFP exists.
+        if "digital marketing" in srv_core.lower() or "seo" in srv_core.lower():
+            queries.append(f"{loc_token} {cat_clean} improve online presence social media marketing patient outreach".strip())
+            queries.append(f"{loc_token} {cat_clean} digital marketing campaign requirement agency".strip())
+        elif "website" in srv_core.lower() or "web" in srv_core.lower():
+            queries.append(f"{loc_token} {cat_clean} website redesign online booking portal requirement".strip())
+            queries.append(f"{loc_token} {cat_clean} improve website online presence development".strip())
 
         unique_queries = []
         for q in queries:
