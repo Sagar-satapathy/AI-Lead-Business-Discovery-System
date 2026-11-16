@@ -127,7 +127,6 @@ AGENCY_SELLER_PATTERNS = [
     r"\b(healthcare|education|retail|ecommerce)\s+website\s+(design|development|solutions)\s+(company|agency|firm)\b",
     r"\bwork\s+with\s+(an?\s+)?.*(website|development)\s+company\b",
     r"\bweb\s+development\s+agency\b",
-    r"\bdigital\s+marketing\s+agency\b",
     r"\bhire\s+(dedicated\s+)?developers\b",
     r"\bcustom\s+website\s+development\b",
     r"\bleading\s+(global\s+)?digital\s+marketing\b",
