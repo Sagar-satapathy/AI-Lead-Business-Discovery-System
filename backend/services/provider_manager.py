@@ -52,7 +52,13 @@ def get_active_discovery_provider() -> Tuple[str, Any]:
         if serper.is_configured():
             return "serper", serper
 
-        # Default to safe static benchmark mode
+        # Mwmbl is a keyless public search provider. Use it before demonstration
+        # benchmarks so AUTO mode performs live discovery without requiring a key.
+        mwmbl = MwmblProvider()
+        if mwmbl.is_configured():
+            return "mwmbl", mwmbl
+
+        # Static benchmarks are used only when no live provider is available.
         return "static_benchmark", None
 
     # Fallback to static benchmarks for unknown strings
