@@ -231,7 +231,7 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
         if (res.candidates && res.candidates.length > 0 && liveCandidates.length === 0) {
           setError('No live external opportunities found. Static demonstration benchmarks are disabled.');
         } else {
-          setError(res.stats?.message || `No verified opportunities found matching ${state}, ${category}, ${service}.`);
+          setError(res.stats?.message || `No matching public opportunities surfaced for ${state}, ${category}, and ${service}. This does not mean no businesses need the service. Try a nearby location or broader search phrase.`);
         }
       }
     } catch (err: any) {
@@ -618,16 +618,15 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
               <div className="empty-state-icon text-muted">
                 <AlertCircle size={36} />
               </div>
-              <h4 className="empty-state-title">No verified opportunities found</h4>
+              <h4 className="empty-state-title">No matching opportunities surfaced this time</h4>
               <p className="empty-state-description">
                 {result.stats.message ||
-                  `No verified opportunities found matching State "${state}", Category "${category}", and Service "${service}".`}
+                  `No matching public opportunities surfaced for State "${state}", Category "${category}", and Service "${service}". This does not mean no businesses need the service.`}
               </p>
               <div className="empty-state-guarantee">
                 <ShieldCheck size={14} className="text-emerald" />
                 <span>
-                  <strong>Strict Authenticity Guarantee:</strong> The discovery engine strictly matches requested
-                  criteria and never fabricates synthetic or out-of-region opportunities.
+                  <strong>Source-quality check:</strong> Only public-source results that pass the current relevance checks are shown. A zero-result search is not proof that no potential buyers exist.
                 </span>
               </div>
             </div>
