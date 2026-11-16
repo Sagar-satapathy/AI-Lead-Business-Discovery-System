@@ -58,6 +58,28 @@ export interface Lead {
   source_evidence_snippet?: string;
 }
 
+export interface ServiceCategoryBreakdown {
+  service_category: string;
+  total_leads: number;
+  high_priority_leads: number;
+  medium_priority_leads: number;
+  low_priority_leads: number;
+}
+
+export interface HighPriorityOpportunity {
+  id: number;
+  business_name: string;
+  category: string;
+  buying_intent: string;
+  lead_score: number;
+  relevance: string;
+  priority: string;
+  location?: string;
+  date_found?: string;
+  is_exported?: number;
+  summary?: string;
+}
+
 export interface DashboardMetrics {
   total_records: number;
   processed_records: number;
@@ -71,6 +93,7 @@ export interface DashboardMetrics {
   potential_intent_leads: number;
   unclear_intent_leads: number;
   not_yet_exported: number;
+  exported_leads?: number;
   verified_leads?: number;
   unverified_leads?: number;
   demo_leads?: number;
@@ -78,6 +101,8 @@ export interface DashboardMetrics {
   category_counts: Record<string, number>;
   priority_counts: Record<string, number>;
   intent_counts: Record<string, number>;
+  service_breakdown?: ServiceCategoryBreakdown[];
+  high_priority_opportunities?: HighPriorityOpportunity[];
 }
 
 export interface HealthStatus {
@@ -147,6 +172,7 @@ export interface DiscoveredLead {
   evidence_text?: string;
   search_query?: string;
   buying_intent?: string;
+  relevance?: string;
   discovery_provider?: string;
   ingest_status?: 'ingested' | 'already_exists' | 'unprocessed' | string;
   id?: number;

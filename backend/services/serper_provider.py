@@ -65,6 +65,97 @@ DIRECTORY_EXCLUSIONS = [
     "indeed.com",
     "naukri.com",
     "linkedin.com/jobs",
+    "hubstaff.com",
+    "talent.hubstaff.com",
+]
+
+# Supported marketplace platforms for genuine buyer project discovery via search engine indexing
+SUPPORTED_MARKETPLACES: Dict[str, Dict[str, str]] = {
+    "peopleperhour": {
+        "name": "PeoplePerHour",
+        "domain": "peopleperhour.com",
+        "site_query": "(site:peopleperhour.com/freelance-jobs OR site:peopleperhour.com/job)",
+        "access_mode": "search_indexed_public",
+    },
+    "truelancer": {
+        "name": "Truelancer",
+        "domain": "truelancer.com",
+        "site_query": "(site:truelancer.com/freelance-jobs OR site:truelancer.com/project)",
+        "access_mode": "search_indexed_public",
+    },
+    "contra": {
+        "name": "Contra",
+        "domain": "contra.com",
+        "site_query": "site:contra.com/opportunity",
+        "access_mode": "search_indexed_public",
+    },
+}
+
+# Explicitly excluded platforms
+EXCLUDED_MARKETPLACES: Dict[str, Dict[str, str]] = {
+    "hubstaff": {
+        "name": "Hubstaff Talent",
+        "reason": "Employment vacancies and full-time hiring listings; not buyer service requests.",
+    },
+    "fiverr": {
+        "name": "Fiverr",
+        "reason": "Freelancer seller service advertisements ('gigs'); not buyer project requests.",
+    },
+}
+
+# Marketplace buyer requirement indicators (Active buying intent)
+MARKETPLACE_BUYER_PATTERNS = [
+    r"\blooking\s+for\s+(?:[a-z0-9\s-]{0,30}?\s+)?(?:developer|agency|freelancer|expert|specialist|team|programmer|designer|partner|engineer|vendor)\b",
+    r"\bneed\s+(?:[a-z0-9\s-]{0,30}?\s+)?(?:website|developer|app|portal|redesign|store|seo|coder|programmer|specialist|engineer|design)\b",
+    r"\bseeking\s+(?:[a-z0-9\s-]{0,30}?\s+)?(?:developer|agency|team|specialist|expert|designer|engineer|proposals|bids|vendor|partner)\b",
+    r"\bproject\s+description\b",
+    r"\bproject\s+brief\b",
+    r"\bclient\s+is\s+looking\b",
+    r"\bwe\s+need\s+(?:[a-z0-9\s-]{0,30}?\s+)?(?:a|to|developer|agency|website|app|designer|help)",
+    r"\bbudget\s*[:\$₹£€\d]",
+    r"\bfixed\s+price\b",
+    r"\bhourly\s+rate\b",
+    r"\bjob\s+details?\b",
+    r"\bjob\s+description\b",
+    r"\brequirements?\s*[:\-]",
+    r"\bscope\s+of\s+work\b",
+    r"\bproposals?\s+received\b",
+    r"\bapply\s+for\s+this\s+job\b",
+    r"\bhire\s+a\s+freelancer\s+for\b",
+    r"\bclient\s+needs\b",
+]
+
+# Patterns identifying freelancer self-promotions and service advertisements (to be rejected)
+FREELANCER_AD_PATTERNS = [
+    r"\bi\s+will\s+(create|build|develop|design|make|fix|provide|boost|do)\b",
+    r"\bmy\s+services?\b",
+    r"\bhire\s+me\b",
+    r"\bhire\s+my\s+team\b",
+    r"\babout\s+the\s+freelancer\b",
+    r"\bfreelancer\s+profile\b",
+    r"\btop\s+rated\s+freelancer\b",
+    r"\bpro\s+freelancer\b",
+    r"\bportfolio\s+items?\b",
+    r"\bstarting\s+at\s+[\$₹£€]\d+",
+    r"\bview\s+my\s+portfolio\b",
+    r"\bgig\s+description\b",
+    r"\bseller\s+level\b",
+    r"\bcompleted\s+\d+\s+projects\b",
+]
+
+# Patterns identifying employment vacancies (to be rejected)
+EMPLOYMENT_PATTERNS = [
+    r"\bfull-time\s+(role|position|job|employment|engineer|developer)\b",
+    r"\bpart-time\s+(role|position|job)\b",
+    r"\bwe\s+are\s+hiring\s+(a\s+)?(senior|junior|lead|staff)?\b",
+    r"\bcareer\s+opportunity\b",
+    r"\bjob\s+opening\b",
+    r"\bsalary\s*[:\$₹£€\d]",
+    r"\bannual\s+salary\b",
+    r"\bequity\s*[:\d]",
+    r"\bbenefits\s+include\s+(health|pto|401k)\b",
+    r"\byears\s+of\s+experience\s+required\b",
+    r"\bper\s+annum\b",
 ]
 
 # Patterns identifying self-advertising service providers rather than buyers
@@ -136,8 +227,11 @@ class SerperProvider:
     _last_query_successful: bool = False
 
     def __init__(self, api_key: Optional[str] = None):
-        # Prefer injected key or environment setting
-        self._api_key = (api_key or settings.SERPER_API_KEY or "").strip()
+        # Prefer injected key (even empty string for unconfigured testing) or environment setting
+        if api_key is not None:
+            self._api_key = api_key.strip()
+        else:
+            self._api_key = (settings.SERPER_API_KEY or "").strip()
 
     def is_configured(self) -> bool:
         """Returns True if a non-empty SERPER_API_KEY is configured."""
@@ -165,6 +259,7 @@ class SerperProvider:
             "live_search_executed": self.has_executed_live_search(),
             "total_queries_executed": self._total_queries,
             "last_query_at": self._last_query_at,
+            "supported_marketplaces": list(SUPPORTED_MARKETPLACES.keys()),
         }
 
     def build_search_query(
@@ -259,10 +354,194 @@ class SerperProvider:
         query_parts.append(intent_clause)
 
         # Exclude directories and job boards
-        exclusion_clause = " -site:clutch.co -site:goodfirms.co -site:justdial.com -site:sulekha.com -site:upwork.com -site:freelancer.com -site:linkedin.com/jobs"
+        exclusion_clause = " -site:clutch.co -site:goodfirms.co -site:justdial.com -site:sulekha.com -site:upwork.com -site:freelancer.com -site:fiverr.com -site:talent.hubstaff.com -site:hubstaff.com -site:linkedin.com/jobs"
 
         query_str = " ".join(query_parts) + exclusion_clause
         return query_str.strip(), gl
+
+    def build_marketplace_query(
+        self,
+        service: str,
+        location: str = "",
+        platform: Optional[str] = None,
+    ) -> Tuple[str, Optional[str]]:
+        """
+        Builds a targeted query string and Google country code (gl) tailored for
+        public marketplace buyer requirements on PeoplePerHour, Truelancer, and Contra.
+
+        Enforces:
+        - Strict site indexing filters on job/project paths.
+        - Digital service requirement terms (Web Dev, E-commerce, Mobile App, SEO, Web App).
+        - Buyer intent signals ("looking for", "need a", "project", "budget").
+        - Exclusions of freelancer gig ads ("I will", "hire me") and employment directories.
+        """
+        srv_clean = service.strip() if service else ""
+        srv_lower = srv_clean.lower()
+        loc_clean = location.strip() if location else ""
+        loc_lower = loc_clean.lower()
+
+        # 1. Geographic country code (gl)
+        gl: Optional[str] = None
+        indian_keywords = [
+            "andhra", "arunachal", "assam", "bihar", "chhattisgarh", "goa", "gujarat",
+            "haryana", "himachal", "jharkhand", "karnataka", "kerala", "madhya",
+            "maharashtra", "manipur", "meghalaya", "mizoram", "nagaland", "odisha",
+            "punjab", "rajasthan", "sikkim", "tamil", "telangana", "tripura", "uttar",
+            "uttarakhand", "bengal", "delhi", "chandigarh", "jammu", "kashmir",
+            "ladakh", "puducherry", "hyderabad", "bengaluru", "bangalore", "mumbai", "india"
+        ]
+        if any(k in loc_lower for k in indian_keywords):
+            gl = "in"
+        elif "uk" in loc_lower or "london" in loc_lower or "united kingdom" in loc_lower:
+            gl = "gb"
+        elif "us" in loc_lower or "united states" in loc_lower or "austin" in loc_lower or "chicago" in loc_lower:
+            gl = "us"
+        elif "canada" in loc_lower or "toronto" in loc_lower:
+            gl = "ca"
+
+        # 2. Targeted Site Clause
+        platform_lower = (platform or "").lower().strip()
+        if platform_lower == "peopleperhour":
+            site_clause = "(site:peopleperhour.com/freelance-jobs OR site:peopleperhour.com/job)"
+        elif platform_lower == "truelancer":
+            site_clause = "(site:truelancer.com/freelance-jobs OR site:truelancer.com/project)"
+        elif platform_lower == "contra":
+            site_clause = "site:contra.com/opportunity"
+        else:
+            site_clause = "(site:peopleperhour.com/freelance-jobs OR site:peopleperhour.com/job OR site:truelancer.com/freelance-jobs OR site:truelancer.com/project OR site:contra.com/opportunity)"
+
+        # 3. Service Requirement Clause
+        if "ecommerce" in srv_lower or "e-commerce" in srv_lower or "shopify" in srv_lower or "store" in srv_lower:
+            service_clause = '("ecommerce" OR "e-commerce" OR "shopify" OR "woocommerce" OR "online store")'
+        elif "web application" in srv_lower or "web app" in srv_lower:
+            service_clause = '("web application" OR "web app" OR "saas portal" OR "cloud application")'
+        elif "mobile" in srv_lower or re.search(r"\bapps?\b", srv_lower) or "ios" in srv_lower or "android" in srv_lower:
+            service_clause = '("mobile app" OR "iOS" OR "Android" OR "flutter" OR "react native")'
+        elif "seo" in srv_lower or "digital marketing" in srv_lower:
+            service_clause = '("SEO" OR "digital marketing" OR "search engine optimization")'
+        elif "redesign" in srv_lower:
+            service_clause = '("website redesign" OR "redesign website" OR "revamp website")'
+        elif "website" in srv_lower or "web" in srv_lower:
+            service_clause = '("website development" OR "website redesign" OR "wordpress" OR "web designer")'
+        elif srv_clean:
+            service_clause = f'"{srv_clean}"'
+        else:
+            service_clause = '("website development" OR "mobile app" OR "ecommerce")'
+
+        # 4. Explicit Buyer Intent Clause
+        intent_clause = '("looking for" OR "need a" OR "seeking" OR "project" OR "budget" OR "client")'
+
+        # 5. Exclusion Clause
+        exclusion_clause = ' -site:fiverr.com -site:talent.hubstaff.com -site:hubstaff.com -site:upwork.com -site:freelancer.com -site:clutch.co -site:goodfirms.co -site:linkedin.com/jobs "I will" "hire me"'
+
+        query_parts = [site_clause, service_clause, intent_clause]
+        query_str = " ".join(query_parts) + exclusion_clause
+        return query_str.strip(), gl
+
+    def search_marketplace_opportunities(
+        self,
+        service: str,
+        location: str = "",
+        category: str = "",
+        platform: Optional[str] = None,
+        num_results: int = 10,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Discovers genuine buyer project requests from supported marketplaces (PeoplePerHour, Truelancer, Contra).
+        Uses Serper.dev Google Search API with zero direct scraping.
+        Filters out freelancer service advertisements and employment listings.
+        """
+        if not self.is_configured():
+            logger.warning("Marketplace search attempted but SERPER_API_KEY is not configured.")
+            return [], {
+                "success": False,
+                "error": "SERPER_API_KEY is not configured.",
+                "candidates_count": 0,
+            }
+
+        query_str, gl = self.build_marketplace_query(service, location, platform)
+        payload: Dict[str, Any] = {
+            "q": query_str,
+            "num": min(max(num_results, 5), 20),
+        }
+        if gl:
+            payload["gl"] = gl
+
+        headers = {
+            "X-API-KEY": self._api_key,
+            "Content-Type": "application/json",
+        }
+
+        sanitized_query = query_str[:120] + "..." if len(query_str) > 120 else query_str
+        logger.info(f"Dispatching marketplace query to Serper.dev: '{sanitized_query}' [gl={gl}]")
+
+        start_time = time.time()
+        try:
+            with httpx.Client(timeout=self.TIMEOUT_SECONDS) as client:
+                response = client.post(self.ENDPOINT, headers=headers, json=payload)
+                elapsed_ms = int((time.time() - start_time) * 1000)
+
+                SerperProvider._total_queries += 1
+                SerperProvider._last_query_at = datetime.datetime.utcnow().isoformat()
+
+                if response.status_code == 200:
+                    data = response.json()
+                    SerperProvider._last_query_successful = True
+                    candidates = self._process_marketplace_results(
+                        organic=data.get("organic", []),
+                        search_query=query_str,
+                        target_service=service,
+                        target_location=location,
+                        target_category=category,
+                    )
+                    return candidates, {
+                        "success": True,
+                        "query": query_str,
+                        "credits": data.get("credits", 1),
+                        "elapsed_ms": elapsed_ms,
+                        "candidates_count": len(candidates),
+                        "raw_results_count": len(data.get("organic", [])),
+                        "source_type": "marketplace",
+                    }
+                elif response.status_code == 429:
+                    SerperProvider._last_query_successful = False
+                    logger.warning(f"Serper.dev rate limit reached (HTTP 429) in {elapsed_ms}ms.")
+                    return [], {
+                        "success": False,
+                        "error": "Rate limit exceeded on external search provider (HTTP 429).",
+                        "status_code": 429,
+                        "candidates_count": 0,
+                    }
+                elif response.status_code in (401, 403):
+                    SerperProvider._last_query_successful = False
+                    return [], {
+                        "success": False,
+                        "error": "External search provider authentication failed. Check SERPER_API_KEY.",
+                        "status_code": response.status_code,
+                        "candidates_count": 0,
+                    }
+                else:
+                    SerperProvider._last_query_successful = False
+                    return [], {
+                        "success": False,
+                        "error": f"Search provider returned HTTP {response.status_code}.",
+                        "status_code": response.status_code,
+                        "candidates_count": 0,
+                    }
+        except httpx.TimeoutException:
+            SerperProvider._last_query_successful = False
+            return [], {
+                "success": False,
+                "error": f"External search request timed out after {self.TIMEOUT_SECONDS}s.",
+                "candidates_count": 0,
+            }
+        except Exception as e:
+            SerperProvider._last_query_successful = False
+            return [], {
+                "success": False,
+                "error": f"Search provider error: {str(e)}",
+                "candidates_count": 0,
+            }
 
     def search(
         self,
@@ -270,6 +549,7 @@ class SerperProvider:
         category: str,
         service: str,
         num_results: int = 10,
+        search_type: str = "procurement",
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Executes a targeted search using Serper.dev Google Search API.
@@ -289,6 +569,14 @@ class SerperProvider:
                 "error": "SERPER_API_KEY is not configured.",
                 "candidates_count": 0,
             }
+
+        if search_type == "marketplace":
+            return self.search_marketplace_opportunities(
+                service=service,
+                location=location,
+                category=category,
+                num_results=num_results,
+            )
 
         query_str, gl = self.build_search_query(location, category, service)
         payload: Dict[str, Any] = {
@@ -421,8 +709,21 @@ class SerperProvider:
             except Exception:
                 continue
 
-            # 2. Filter out directory spam
+            # 2. Filter out directory spam and excluded platforms
             if any(netloc == d or netloc.endswith("." + d) or d in link.lower() for d in DIRECTORY_EXCLUSIONS):
+                continue
+
+            # Route supported marketplace domains through dedicated marketplace processor
+            if any(m_domain in netloc for m_domain in ("peopleperhour.com", "truelancer.com", "contra.com")):
+                m_candidates = self._process_marketplace_results(
+                    organic=[item],
+                    search_query=search_query,
+                    target_service=target_service,
+                    target_location=target_location,
+                    target_category=target_category,
+                )
+                if m_candidates:
+                    candidates.extend(m_candidates)
                 continue
 
             # 3. Filter out self-advertising agencies & vendors (seller vs. buyer separation)
@@ -484,6 +785,163 @@ class SerperProvider:
             candidates.append(candidate)
 
         return candidates
+
+    def _process_marketplace_results(
+        self,
+        organic: List[Dict[str, Any]],
+        search_query: str,
+        target_service: str,
+        target_location: str,
+        target_category: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Parses organic marketplace search results into authentic buyer discovery leads.
+        Rules:
+        - Drops freelancer gig/portfolio ads ("I will build...", "hire me").
+        - Drops employment/salary vacancies.
+        - Excludes unsupported platforms (Fiverr, Hubstaff).
+        - Correctly attributes supported platforms (PeoplePerHour, Truelancer, Contra).
+        - Extracts buying intent (Active vs Potential vs Unqualified).
+        - Never fabricates client names, budgets, or dates.
+        - Preserves strict provenance and unverified verification status.
+        """
+        candidates: List[Dict[str, Any]] = []
+        seen_urls = set()
+
+        for item in organic:
+            title = (item.get("title") or "").strip()
+            link = (item.get("link") or "").strip()
+            snippet = (item.get("snippet") or "").strip()
+
+            if not title or not link or link in seen_urls:
+                continue
+            seen_urls.add(link)
+
+            # 1. Parse hostname/domain
+            try:
+                parsed_url = urllib.parse.urlparse(link)
+                netloc = parsed_url.netloc.lower()
+            except Exception:
+                continue
+
+            # 2. Exclude directory exclusions and unsupported platforms
+            if any(netloc == d or netloc.endswith("." + d) or d in link.lower() for d in DIRECTORY_EXCLUSIONS):
+                logger.debug(f"Filtered excluded directory/platform: {link}")
+                continue
+
+            # Identify marketplace platform
+            platform_name = None
+            if "peopleperhour.com" in netloc:
+                platform_name = "PeoplePerHour"
+            elif "truelancer.com" in netloc:
+                platform_name = "Truelancer"
+            elif "contra.com" in netloc:
+                platform_name = "Contra"
+            else:
+                # Not a supported marketplace
+                continue
+
+            combined_text = f"{title} {snippet}".lower()
+
+            # 3. Reject freelancer seller advertisements ("I will build...", "Hire me", "Portfolio", "Gig")
+            if any(re.search(pat, combined_text) for pat in FREELANCER_AD_PATTERNS):
+                logger.debug(f"Filtered freelancer advertisement: '{title}' ({link})")
+                continue
+
+            # 4. Reject employment listings ("Full-time", "Salary", "We are hiring engineer")
+            if any(re.search(pat, combined_text) for pat in EMPLOYMENT_PATTERNS):
+                logger.debug(f"Filtered employment vacancy: '{title}' ({link})")
+                continue
+
+            # 5. Classify Buying Intent
+            has_active_intent = any(re.search(pat, combined_text) for pat in MARKETPLACE_BUYER_PATTERNS) or any(
+                re.search(pat, combined_text) for pat in ACTIVE_INTENT_PATTERNS
+            )
+            has_potential_intent = any(re.search(pat, combined_text) for pat in POTENTIAL_INTENT_PATTERNS)
+
+            if not has_active_intent and not has_potential_intent:
+                logger.debug(f"Skipping marketplace item without identifiable buyer intent: '{title}'")
+                continue
+
+            buying_intent = "Active" if has_active_intent else "Potential"
+
+            # 6. Extract clean business/client name without fabrication
+            business_name = self._extract_marketplace_client_name(title, snippet, platform_name)
+
+            # 7. Extract location if mentioned, or preserve target location
+            client_location = self._extract_marketplace_location(title, snippet, target_location)
+
+            # 8. Publication date: ONLY if genuinely available from Serper, never defaulted to today
+            pub_date = item.get("date") or None
+
+            # Evidence text: verbatim snippet from marketplace
+            evidence_text = snippet if snippet else title
+
+            candidate = {
+                "business_name": business_name,
+                "location": client_location,
+                "category": target_category if target_category and target_category.lower() != "all" else "Digital Services",
+                "service": target_service if target_service and target_service.lower() != "all" else "Digital Transformation",
+                "requirement": f"{title}. {snippet}" if snippet and title not in snippet else (snippet or title),
+                "source_name": f"{platform_name} Marketplace",
+                "source_url": link,
+                "source_title": title,
+                "source_domain": netloc.replace("www.", ""),
+                "publication_date": pub_date,
+                "date_found": datetime.date.today().strftime("%Y-%m-%d"),
+                "record_type": "live_discovery",
+                "verification_status": "unverified",
+                "is_live_discovery": True,
+                "provider_name": "serper",
+                "discovered_at": datetime.datetime.utcnow().isoformat(),
+                "evidence_text": evidence_text,
+                "search_query": search_query,
+                "buying_intent": buying_intent,
+                "verification_notes": f"Public buyer project request on {platform_name}; pending independent client verification.",
+                "discovery_provider": f"Serper.dev ({platform_name})",
+                "marketplace": platform_name,
+            }
+
+            candidates.append(candidate)
+
+        return candidates
+
+    def _extract_marketplace_client_name(self, title: str, snippet: str, platform_name: str) -> str:
+        """
+        Extracts genuine client/organisation name if explicitly mentioned in title or snippet.
+        Never fabricates fictional client or company names.
+        If no explicit name is provided, uses a transparent attribution e.g. 'Client via PeoplePerHour'.
+        """
+        combined = f"{title} {snippet}"
+        m = re.search(r"\b(?:client|posted by|company|organisation|organization)\s*[:\-]\s*([A-Za-z0-9\s&,.'-]{3,40}?)(?=[,.;|\n]|$)", combined, re.IGNORECASE)
+        if m:
+            extracted = m.group(1).strip()
+            if len(extracted) > 2 and extracted.lower() not in ("private", "confidential", "anonymous", "verified", "unknown"):
+                return extracted
+
+        parts = re.split(r"\s+[-|:–—]\s+", title)
+        if len(parts) >= 2:
+            last_part = parts[-1].strip()
+            if (
+                len(last_part) > 3
+                and platform_name.lower() not in last_part.lower()
+                and not any(term in last_part.lower() for term in ["job", "freelance", "project", "remote", "fixed price", "budget"])
+            ):
+                return last_part
+
+        return f"Client via {platform_name}"
+
+    def _extract_marketplace_location(self, title: str, snippet: str, fallback_location: str) -> str:
+        """
+        Detects if a specific client location is mentioned in the marketplace snippet.
+        """
+        combined = f"{title} {snippet}"
+        m = re.search(r"\b(?:client in|based in|location\s*[:\-])\s*([A-Za-z\s,]{3,30}?)(?=[,.;|\n\-]|$)", combined, re.IGNORECASE)
+        if m:
+            loc_found = m.group(1).strip()
+            if len(loc_found) > 2:
+                return loc_found
+        return fallback_location if fallback_location and fallback_location.lower() != "all" else "Global / Remote"
 
     def _extract_clean_business_name(self, title: str, domain: str) -> str:
         """

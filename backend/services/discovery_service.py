@@ -375,6 +375,7 @@ def discover_leads(
     service: str,
     auto_ingest: bool = False,
     limit: int = 10,
+    source_type: str = "procurement",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Executes business lead discovery with strict matching against requested
@@ -402,40 +403,46 @@ def discover_leads(
     search_meta: Dict[str, Any] = {}
 
     if not live_provider_connected:
-        # 1. Search Predefined Demonstration Procurement Benchmarks (Static Mode)
-        for entry in DEMO_PROCUREMENT_BENCHMARKS:
-            # Strict Location Check
-            if not strict_location_match(entry["location"], loc_clean):
-                continue
+        # Search Predefined Demonstration Procurement Benchmarks ONLY if static_benchmark is explicitly configured
+        if active_name == "static_benchmark":
+            for entry in DEMO_PROCUREMENT_BENCHMARKS:
+                # Strict Location Check
+                if not strict_location_match(entry["location"], loc_clean):
+                    continue
 
-            # Strict Category Check
-            if not strict_category_match(entry["category"], cat_clean):
-                continue
+                # Strict Category Check
+                if not strict_category_match(entry["category"], cat_clean):
+                    continue
 
-            # Strict Service Check
-            if not strict_service_match(entry["service"], entry["requirement"], srv_clean):
-                continue
+                # Strict Service Check
+                if not strict_service_match(entry["service"], entry["requirement"], srv_clean):
+                    continue
 
-            candidate = dict(entry)
-            candidate["record_type"] = "demo"
-            candidate["verification_status"] = "demo"
-            candidate["is_live_discovery"] = False
-            candidate["verified_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            candidate["discovery_provider"] = "Predefined Static Demonstration Benchmark"
-            candidate["source_fetch_status"] = "static_benchmark"
-            candidate["source_page_type"] = "buyer_procurement"
-            candidate["source_verified_at"] = candidate["verified_at"]
-            candidate["source_evidence_snippet"] = candidate.get("requirement", "")
-            matched_candidates.append(candidate)
+                candidate = dict(entry)
+                candidate["record_type"] = "demo"
+                candidate["verification_status"] = "demo"
+                candidate["is_live_discovery"] = False
+                candidate["verified_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                candidate["discovery_provider"] = "Predefined Static Demonstration Benchmark"
+                candidate["source_fetch_status"] = "static_benchmark"
+                candidate["source_page_type"] = "buyer_procurement"
+                candidate["source_verified_at"] = candidate["verified_at"]
+                candidate["source_evidence_snippet"] = candidate.get("requirement", "")
+                matched_candidates.append(candidate)
+        else:
+            search_error = f"Active provider '{active_name}' is not configured or credentials are missing."
     else:
         # 2. Live Search Provider (Tavily, Serper, or Mwmbl)
         try:
-            live_results, search_meta = active_provider.search(
-                location=loc_clean,
-                category=cat_clean,
-                service=srv_clean,
-                num_results=limit,
-            )
+            search_kwargs: Dict[str, Any] = {
+                "location": loc_clean,
+                "category": cat_clean,
+                "service": srv_clean,
+                "num_results": limit,
+            }
+            if hasattr(active_provider, "build_marketplace_query") and source_type != "procurement":
+                search_kwargs["search_type"] = source_type
+            live_results, search_meta = active_provider.search(**search_kwargs)
             if search_meta.get("credit_exhausted"):
                 credit_exhausted = True
                 search_error = search_meta.get("error", "Free search provider credits are exhausted.")

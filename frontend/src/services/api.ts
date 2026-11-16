@@ -22,7 +22,13 @@ export const api = {
   },
 
   async getMetrics(): Promise<DashboardMetrics> {
-    const res = await fetch(`${API_BASE}/metrics`);
+    const res = await fetch(`${API_BASE}/metrics?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+    });
     if (!res.ok) throw new Error('Failed to fetch dashboard metrics.');
     return res.json();
   },
@@ -42,7 +48,10 @@ export const api = {
     if (filters.relevance && filters.relevance !== 'All') params.append('relevance', filters.relevance);
     if (filters.status && filters.status !== 'All') params.append('status', filters.status);
     if (filters.is_exported !== undefined && filters.is_exported !== 'All' && filters.is_exported !== '') {
-      params.append('is_exported', filters.is_exported);
+      let expVal = filters.is_exported;
+      if (expVal === 'Exported') expVal = '1';
+      if (expVal === 'Not Exported' || expVal === 'Unexported') expVal = '0';
+      params.append('is_exported', expVal);
     }
     if (filters.record_type && filters.record_type !== 'All') params.append('record_type', filters.record_type);
     if (filters.verification_status && filters.verification_status !== 'All') params.append('verification_status', filters.verification_status);
@@ -196,12 +205,42 @@ export const api = {
     return res.json();
   },
 
-  getExportCsvUrl(scope: string): string {
-    return `${API_BASE}/export/csv?scope=${encodeURIComponent(scope)}`;
+  getExportCsvUrl(scope: string, lead_ids?: number[]): string {
+    let url = `${API_BASE}/export/csv?scope=${encodeURIComponent(scope)}`;
+    if (lead_ids && lead_ids.length > 0) {
+      url += `&lead_ids=${encodeURIComponent(lead_ids.join(','))}`;
+    }
+    return url;
   },
 
-  getExportExcelUrl(scope: string): string {
-    return `${API_BASE}/export/excel?scope=${encodeURIComponent(scope)}`;
+  getExportExcelUrl(scope: string, lead_ids?: number[]): string {
+    let url = `${API_BASE}/export/excel?scope=${encodeURIComponent(scope)}`;
+    if (lead_ids && lead_ids.length > 0) {
+      url += `&lead_ids=${encodeURIComponent(lead_ids.join(','))}`;
+    }
+    return url;
+  },
+
+  async downloadExport(format: 'csv' | 'excel', scope: string, lead_ids?: number[]): Promise<void> {
+    const url = format === 'csv' ? this.getExportCsvUrl(scope, lead_ids) : this.getExportExcelUrl(scope, lead_ids);
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'No leads selected. Please select at least one lead.');
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : `leads_export.${format === 'csv' ? 'csv' : 'xlsx'}`;
+
+    const blobUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(blobUrl);
   },
 
   async confirmExport(lead_ids: number[]): Promise<{

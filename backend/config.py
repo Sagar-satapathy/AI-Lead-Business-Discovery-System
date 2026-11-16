@@ -21,12 +21,17 @@ class Settings:
     APP_VERSION: str = "2.0.0"
     DEBUG: bool = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes")
 
+    # Environment Detection
+    IS_VERCEL: bool = os.getenv("VERCEL") == "1" or "VERCEL_ENV" in os.environ
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", os.getenv("NODE_ENV", "development")).lower()
+    IS_PRODUCTION: bool = IS_VERCEL or ENVIRONMENT in ("production", "prod")
+
     # Database Configuration
-    # Defaults to the existing SQLite leads.db in root workspace.
-    # Set DATABASE_URL=postgresql://user:password@localhost:5432/leads_db to use PostgreSQL.
+    # Defaults to local SQLite leads.db ONLY in non-production local development.
+    # In production or on Vercel, a PostgreSQL DATABASE_URL is strictly mandatory.
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        f"sqlite:///{os.path.join(BASE_DIR, 'leads.db')}"
+        "" if (IS_VERCEL or ENVIRONMENT in ("production", "prod")) else f"sqlite:///{os.path.join(BASE_DIR, 'leads.db')}"
     )
 
     # AI Configuration

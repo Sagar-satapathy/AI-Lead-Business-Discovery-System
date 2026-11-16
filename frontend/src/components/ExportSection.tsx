@@ -6,14 +6,21 @@ import { api } from '../services/api';
 interface ExportSectionProps {
   metrics: DashboardMetrics | null;
   onExportConfirmed: () => void;
+  selectedLeadIds?: number[];
+  onClearSelection?: () => void;
+  onNavigateToExplorer?: () => void;
 }
 
 export const ExportSection: React.FC<ExportSectionProps> = ({
   metrics,
   onExportConfirmed,
+  selectedLeadIds = [],
+  onClearSelection,
+  onNavigateToExplorer,
 }) => {
   const [scope, setScope] = useState('unexported');
   const [confirming, setConfirming] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
   const [confirmMessage, setConfirmMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,39 +30,48 @@ export const ExportSection: React.FC<ExportSectionProps> = ({
     (metrics?.high_priority_leads || 0) + (metrics?.medium_priority_leads || 0);
   const totalCount = metrics?.total_records || 0;
 
-  const handleDownload = (format: 'csv' | 'excel') => {
+  const hasSelection = selectedLeadIds.length > 0;
+  const selectedCount = selectedLeadIds.length;
+
+  const handleDownload = async (format: 'csv' | 'excel') => {
     setError(null);
     setConfirmMessage(null);
-    const url =
-      format === 'csv'
-        ? api.getExportCsvUrl(scope)
-        : api.getExportExcelUrl(scope);
-    window.open(url, '_blank');
+
+    if (selectedCount === 0) {
+      setError('No leads selected. Please select at least one lead.');
+      return;
+    }
+
+    setDownloading(format);
+    try {
+      // 1. Trigger export download for selected lead IDs
+      await api.downloadExport(format, scope, selectedLeadIds);
+
+      // 2. Automatically confirm export status for ONLY the selected lead IDs upon successful download
+      const confirmRes = await api.confirmExport(selectedLeadIds);
+      setConfirmMessage(confirmRes.message || `Successfully marked ${selectedCount} lead(s) as exported.`);
+
+      // 3. Immediately notify parent to refresh metrics and lead explorer data
+      onExportConfirmed();
+    } catch (err: any) {
+      setError(err.message || 'Export download failed. Leads were not marked as exported.');
+    } finally {
+      setDownloading(null);
+    }
   };
 
   const handleConfirmExport = async () => {
+    if (selectedCount === 0) {
+      setError('No leads selected. Please select at least one lead.');
+      return;
+    }
+
     setConfirming(true);
     setError(null);
     setConfirmMessage(null);
 
     try {
-      // Fetch matching lead IDs to confirm - strictly live-discovered leads
-      const leadsRes = await api.getLeads({
-        is_exported: scope === 'unexported' ? '0' : undefined,
-        status: 'processed',
-        relevance: 'Relevant',
-        priority: scope === 'high_medium' ? 'High' : undefined,
-        live_only: true,
-        page_size: 100,
-      });
-
-      const leadIds = leadsRes.leads.map((l) => l.id);
-      if (leadIds.length === 0) {
-        setConfirmMessage('No eligible unexported leads to mark.');
-        return;
-      }
-
-      const res = await api.confirmExport(leadIds);
+      const res = await api.confirmExport(selectedLeadIds);
       setConfirmMessage(res.message);
       onExportConfirmed();
     } catch (err: any) {
@@ -79,6 +95,92 @@ export const ExportSection: React.FC<ExportSectionProps> = ({
             <ShieldCheck size={14} /> RFC-4180 &amp; OpenPyXL Formatted
           </span>
         </div>
+
+        {/* Selected Leads Banner */}
+        {hasSelection ? (
+          <div
+            className="alert-banner alert-success"
+            style={{
+              marginBottom: '20px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <CheckCircle2 size={18} />
+              <div>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+                  {selectedCount} lead{selectedCount > 1 ? 's' : ''} selected
+                </span>{' '}
+                for export from Lead Explorer.
+                <span
+                  style={{
+                    display: 'block',
+                    fontSize: '0.75rem',
+                    opacity: 0.85,
+                    marginTop: '2px',
+                  }}
+                >
+                  Exports will contain only these {selectedCount} selected records.
+                </span>
+              </div>
+            </div>
+            {onClearSelection && (
+              <button
+                type="button"
+                onClick={onClearSelection}
+                className="btn btn-secondary btn-xs"
+                style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+              >
+                Clear Selection
+              </button>
+            )}
+          </div>
+        ) : (
+          <div
+            className="alert-banner alert-warning"
+            style={{
+              marginBottom: '20px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <AlertCircle size={18} />
+              <div>
+                <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+                  No leads selected (0 selected)
+                </span>
+                <span
+                  style={{
+                    display: 'block',
+                    fontSize: '0.75rem',
+                    opacity: 0.85,
+                    marginTop: '2px',
+                  }}
+                >
+                  Please select at least one lead in Lead Explorer before generating an export.
+                </span>
+              </div>
+            </div>
+            {onNavigateToExplorer && (
+              <button
+                type="button"
+                onClick={onNavigateToExplorer}
+                className="btn btn-primary btn-xs"
+                style={{ fontSize: '0.75rem', padding: '5px 12px' }}
+              >
+                Go to Lead Explorer →
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Scope Selection Cards */}
         <div className="export-scopes-grid">
@@ -182,25 +284,43 @@ export const ExportSection: React.FC<ExportSectionProps> = ({
           <div className="download-buttons-group">
             <button
               onClick={() => handleDownload('csv')}
+              disabled={Boolean(downloading)}
               className="btn btn-primary btn-download"
             >
-              <Download size={16} /> Download CSV (UTF-8 BOM)
+              {downloading === 'csv' ? (
+                <>
+                  <span className="spinner-icon"></span> Downloading CSV...
+                </>
+              ) : (
+                <>
+                  <Download size={16} /> Download CSV {hasSelection ? `(${selectedCount} Selected)` : ''} (UTF-8 BOM)
+                </>
+              )}
             </button>
 
             <button
               onClick={() => handleDownload('excel')}
+              disabled={Boolean(downloading)}
               className="btn btn-secondary btn-download"
             >
-              <FileSpreadsheet size={16} /> Download Styled Excel (.xlsx)
+              {downloading === 'excel' ? (
+                <>
+                  <span className="spinner-icon"></span> Downloading Excel...
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet size={16} /> Download Styled Excel {hasSelection ? `(${selectedCount} Selected)` : ''} (.xlsx)
+                </>
+              )}
             </button>
           </div>
 
-          {scope === 'unexported' && unexportedCount > 0 && (
+          {hasSelection && (
             <button
               onClick={handleConfirmExport}
               disabled={confirming}
               className="btn btn-confirm-export"
-              title="Marks downloaded leads as exported in the database"
+              title="Marks selected leads as exported in the database"
             >
               {confirming ? (
                 <>
@@ -208,7 +328,7 @@ export const ExportSection: React.FC<ExportSectionProps> = ({
                 </>
               ) : (
                 <>
-                  <Check size={16} /> Mark Downloaded as Exported
+                  <Check size={16} /> Mark Selected ({selectedCount}) as Exported
                 </>
               )}
             </button>

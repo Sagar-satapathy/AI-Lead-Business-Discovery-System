@@ -21,6 +21,14 @@ interface DiscoverySectionProps {
   onDiscoveryComplete: () => void;
   onInspectLead?: (id: number) => void;
   isLiveConnected?: boolean;
+  state?: string;
+  setState?: React.Dispatch<React.SetStateAction<string>>;
+  category?: string;
+  setCategory?: React.Dispatch<React.SetStateAction<string>>;
+  service?: string;
+  setService?: React.Dispatch<React.SetStateAction<string>>;
+  result?: DiscoveryResult | null;
+  setResult?: React.Dispatch<React.SetStateAction<DiscoveryResult | null>>;
 }
 
 // 28 Indian States & 8 Union Territories (Exclusively Indian Markets)
@@ -89,42 +97,36 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
   onDiscoveryComplete,
   onInspectLead,
   isLiveConnected = false,
+  state: propState,
+  setState: propSetState,
+  category: propCategory,
+  setCategory: propSetCategory,
+  service: propService,
+  setService: propSetService,
+  result: propResult,
+  setResult: propSetResult,
 }) => {
-  // 1. Persistent Form Inputs (State, Category, Service) - Preserved across tabs and reloads
-  const [state, setState] = useState<string>(() => {
-    return localStorage.getItem('discovery_state') || 'Telangana';
-  });
-
-  const [category, setCategory] = useState<string>(() => {
-    return localStorage.getItem('discovery_category') || 'Healthcare';
-  });
-
-  const [service, setService] = useState<string>(() => {
-    return localStorage.getItem('discovery_service') || 'Website Development';
-  });
-
-  // Save form input changes to localStorage
-  useEffect(() => {
-    localStorage.setItem('discovery_state', state);
-  }, [state]);
-
-  useEffect(() => {
-    localStorage.setItem('discovery_category', category);
-  }, [category]);
-
-  useEffect(() => {
-    localStorage.setItem('discovery_service', service);
-  }, [service]);
-
-  // 2. Persistent Discovery Results (Synchronous from localStorage + Async sync from SQLite staging)
-  const [result, setResult] = useState<DiscoveryResult | null>(() => {
+  // Support lifted state from App.tsx or fallback to local state with session cache
+  const [internalState, setInternalState] = useState<string>(() => sessionStorage.getItem('discovery_state') || '');
+  const [internalCategory, setInternalCategory] = useState<string>(() => sessionStorage.getItem('discovery_category') || '');
+  const [internalService, setInternalService] = useState<string>(() => sessionStorage.getItem('discovery_service') || '');
+  const [internalResult, setInternalResult] = useState<DiscoveryResult | null>(() => {
     try {
-      const cached = localStorage.getItem('discovery_current_batch');
-      return cached ? JSON.parse(cached) : null;
+      const saved = sessionStorage.getItem('discovery_result');
+      return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
     }
   });
+
+  const state = propState !== undefined ? propState : internalState;
+  const setState = propSetState || setInternalState;
+  const category = propCategory !== undefined ? propCategory : internalCategory;
+  const setCategory = propSetCategory || setInternalCategory;
+  const service = propService !== undefined ? propService : internalService;
+  const setService = propSetService || setInternalService;
+  const result = propResult !== undefined ? propResult : internalResult;
+  const setResult = propSetResult || setInternalResult;
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -132,51 +134,76 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Sync staging batch from SQLite database on mount to guarantee persistence
-  useEffect(() => {
-    let isMounted = true;
-    api
-      .getCurrentDiscoveryBatch()
-      .then((batchData) => {
-        if (!isMounted) return;
-        if (batchData && batchData.candidates && batchData.candidates.length > 0) {
-          setResult((prev) => {
-            const updatedResult: DiscoveryResult = {
-              candidates: batchData.candidates,
-              stats: prev?.stats || {
-                mode: isLiveConnected ? 'live_search' : 'static_benchmark',
-                provider: isLiveConnected ? 'Serper.dev (Google Search)' : 'Static Benchmark',
-                total_matches: batchData.candidates.length,
-                newly_ingested: 0,
-                duplicates_skipped: batchData.candidates.filter(
-                  (c) => c.ingest_status === 'already_exists' || c.existing_lead_id
-                ).length,
-                query: {
-                  location: state,
-                  category,
-                  service,
-                },
-              },
-            };
-            localStorage.setItem('discovery_current_batch', JSON.stringify(updatedResult));
-            return updatedResult;
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn('Discovery staging sync notice:', err);
-      });
+  // Synchronization helpers for browser refresh persistence
+  const updateState = (val: string) => {
+    setState(val);
+    if (val) {
+      sessionStorage.setItem('discovery_state', val);
+    } else {
+      sessionStorage.removeItem('discovery_state');
+    }
+  };
 
-    return () => {
-      isMounted = false;
-    };
-  }, [isLiveConnected]);
+  const updateCategory = (val: string) => {
+    setCategory(val);
+    if (val) {
+      sessionStorage.setItem('discovery_category', val);
+    } else {
+      sessionStorage.removeItem('discovery_category');
+    }
+  };
+
+  const updateService = (val: string) => {
+    setService(val);
+    if (val) {
+      sessionStorage.setItem('discovery_service', val);
+    } else {
+      sessionStorage.removeItem('discovery_service');
+    }
+  };
+
+  const updateResult = (val: DiscoveryResult | null) => {
+    setResult(val);
+    if (val) {
+      try {
+        sessionStorage.setItem('discovery_result', JSON.stringify(val));
+      } catch (e) {
+        console.warn('Failed to cache discovery result in sessionStorage:', e);
+      }
+    } else {
+      sessionStorage.removeItem('discovery_result');
+    }
+  };
+
+  // Handlers enforcing strict parent-child dependency
+  const handleStateChange = (selectedState: string) => {
+    updateState(selectedState);
+    updateCategory('');
+    updateService('');
+    setError(null);
+  };
+
+  const handleCategoryChange = (selectedCategory: string) => {
+    updateCategory(selectedCategory);
+    updateService('');
+    setError(null);
+  };
+
+  const handleServiceChange = (selectedService: string) => {
+    updateService(selectedService);
+    setError(null);
+  };
 
   const isLive = Boolean(isLiveConnected || result?.stats?.live_provider_connected);
 
   // 3. Automated Discovery Search
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!state.trim() || !category.trim() || !service.trim()) {
+      setError('Please select a State, Business Category, and Requested Service before starting discovery.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setSaveMessage(null);
@@ -192,8 +219,21 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
         limit: 10,
       });
 
-      setResult(res);
-      localStorage.setItem('discovery_current_batch', JSON.stringify(res));
+      // Filter out any demo/static benchmark records
+      const liveCandidates = (res.candidates || []).filter(
+        (c: DiscoveredLead) => c.is_live_discovery && c.record_type !== 'demo' && c.verification_status !== 'demo'
+      );
+      if (liveCandidates.length > 0) {
+        const cleanRes: DiscoveryResult = { ...res, candidates: liveCandidates };
+        updateResult(cleanRes);
+      } else {
+        updateResult(null);
+        if (res.candidates && res.candidates.length > 0 && liveCandidates.length === 0) {
+          setError('No live external opportunities found. Static demonstration benchmarks are disabled.');
+        } else {
+          setError(res.stats?.message || `No verified opportunities found matching ${state}, ${category}, ${service}.`);
+        }
+      }
     } catch (err: any) {
       setError(err.message || 'Discovery search failed.');
     } finally {
@@ -208,16 +248,47 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
     setSaveError(null);
     setSaveMessage(null);
 
+    // Requirement B.1 & B.2: Filter strictly for eligible genuine live discoveries
+    const eligibleCandidates = result.candidates.filter(
+      (c: DiscoveredLead) =>
+        c.is_live_discovery &&
+        c.record_type !== 'demo' &&
+        c.record_type !== 'sample' &&
+        c.verification_status !== 'demo' &&
+        c.relevance !== 'Not Relevant' &&
+        c.buying_intent !== 'Unqualified'
+    );
+
+    if (eligibleCandidates.length === 0) {
+      setSaveError('No eligible genuine live discoveries found to save. Unqualified or demo records cannot be saved.');
+      setSaving(false);
+      return;
+    }
+
     try {
-      const saveRes = await api.saveDiscoveryBatch(result.candidates);
+      const saveRes = await api.saveDiscoveryBatch(eligibleCandidates);
+
       // Display persistent success notification
       setSaveMessage(
         saveRes.message ||
           `Saved ${saveRes.saved_count} new lead(s) to pipeline (${saveRes.duplicates_skipped} duplicate(s) skipped).`
       );
 
-      // Clear the discovery batch only after successful database persistence
-      setResult(null);
+      // Requirements B.3, B.4, B.5, B.7: Return Discovery form and results to completely blank initial state ONLY after successful save
+      updateResult(null);
+      updateState('');
+      updateCategory('');
+      updateService('');
+      setError(null);
+
+      // Clear relevant Discovery storage entries
+      sessionStorage.removeItem('discovery_state');
+      sessionStorage.removeItem('discovery_category');
+      sessionStorage.removeItem('discovery_service');
+      sessionStorage.removeItem('discovery_result');
+      localStorage.removeItem('discovery_state');
+      localStorage.removeItem('discovery_category');
+      localStorage.removeItem('discovery_service');
       localStorage.removeItem('discovery_current_batch');
 
       // Refresh parent system data (KPIs, Lead Explorer)
@@ -228,7 +299,7 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
         setSaveMessage(null);
       }, 8000);
     } catch (err: any) {
-      // If save fails, retain results on screen and display clear error
+      // Requirement B.9: Do not clear the form if saving fails; show a clear error so the user can retry
       setSaveError(err.message || 'Failed to save leads to pipeline. Please try again.');
     } finally {
       setSaving(false);
@@ -380,9 +451,10 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
                 id="state-select"
                 className="form-input"
                 value={state}
-                onChange={(e) => setState(e.target.value)}
+                onChange={(e) => handleStateChange(e.target.value)}
                 style={{ cursor: 'pointer' }}
               >
+                <option value="">Select State</option>
                 {INDIAN_STATES_AND_UTS.map((st) => (
                   <option key={st} value={st}>
                     {st}
@@ -400,14 +472,21 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
                 id="category-select"
                 className="form-input"
                 value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                style={{ cursor: 'pointer' }}
+                onChange={(e) => handleCategoryChange(e.target.value)}
+                disabled={!state}
+                style={{
+                  cursor: state ? 'pointer' : 'not-allowed',
+                  backgroundColor: state ? '#ffffff' : '#f8fafc',
+                  opacity: state ? 1 : 0.65,
+                }}
               >
-                {BUSINESS_CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
+                <option value="">Select Category</option>
+                {state &&
+                  BUSINESS_CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
               </select>
             </div>
 
@@ -420,14 +499,21 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
                 id="service-select"
                 className="form-input"
                 value={service}
-                onChange={(e) => setService(e.target.value)}
-                style={{ cursor: 'pointer' }}
+                onChange={(e) => handleServiceChange(e.target.value)}
+                disabled={!category}
+                style={{
+                  cursor: category ? 'pointer' : 'not-allowed',
+                  backgroundColor: category ? '#ffffff' : '#f8fafc',
+                  opacity: category ? 1 : 0.65,
+                }}
               >
-                {REQUESTED_SERVICES.map((srv) => (
-                  <option key={srv} value={srv}>
-                    {srv}
-                  </option>
-                ))}
+                <option value="">Select Service</option>
+                {category &&
+                  REQUESTED_SERVICES.map((srv) => (
+                    <option key={srv} value={srv}>
+                      {srv}
+                    </option>
+                  ))}
               </select>
             </div>
           </div>
@@ -435,13 +521,16 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
           <div className="discovery-actions-bar">
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !state || !category || !service}
               className="btn btn-primary discovery-search-btn"
+              style={{
+                cursor: loading || !state || !category || !service ? 'not-allowed' : 'pointer',
+                opacity: loading || !state || !category || !service ? 0.65 : 1,
+              }}
             >
               {loading ? (
                 <>
-                  <span className="spinner-icon"></span>{' '}
-                  {isLive ? 'Discovering Businesses...' : 'Loading Benchmarks...'}
+                  <span className="spinner-icon"></span> Discovering Businesses...
                 </>
               ) : (
                 <>
@@ -489,7 +578,7 @@ export const DiscoverySection: React.FC<DiscoverySectionProps> = ({
                     <strong>{result.stats.unqualified_count ?? 0}</strong>
                   </>
                 )}
-                {' '}· State: <strong>{state}</strong> · Category: <strong>{category}</strong> · All evaluated with AI scoring
+                {' '}· State: <strong>{result.stats.query?.location || state}</strong> · Category: <strong>{result.stats.query?.category || category}</strong> · All evaluated with AI scoring
               </p>
             </div>
 

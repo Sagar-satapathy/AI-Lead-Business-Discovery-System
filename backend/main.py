@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional
 import os
 import datetime
 import io
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File, BackgroundTasks, status
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, BackgroundTasks, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -106,6 +106,18 @@ class ExportConfirmRequest(BaseModel):
 @app.get("/api/health", tags=["System"])
 def health_check():
     """Returns application health, database engine, available AI providers, and discovery mode."""
+    if (settings.IS_PRODUCTION or settings.IS_VERCEL) and not is_postgres():
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "unhealthy",
+                "app_name": settings.APP_NAME,
+                "version": settings.APP_VERSION,
+                "database_type": "None",
+                "error": "DATABASE_URL environment variable is mandatory in production / on Vercel. SQLite fallback is disabled.",
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }
+        )
     metrics = get_dashboard_metrics()
     disc_status = get_all_providers_status()
     return {
@@ -141,8 +153,11 @@ def health_check():
 
 
 @app.get("/api/metrics", tags=["Analytics"])
-def get_metrics():
+def get_metrics(response: Response):
     """Returns aggregated KPI summary metrics and category/priority breakdowns."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     metrics = get_dashboard_metrics()
     return metrics
 
@@ -155,7 +170,7 @@ def list_leads(
     buying_intent: Optional[str] = Query(None, description="Filter by buying intent: Active, Potential, Unclear"),
     relevance: Optional[str] = Query(None, description="Filter by relevance: Relevant, Not Relevant"),
     status: Optional[str] = Query(None, description="Filter by status: processed, unprocessed, failed"),
-    is_exported: Optional[int] = Query(None, description="Filter by export status: 0 (unexported) or 1 (exported)"),
+    is_exported: Optional[str] = Query(None, description="Filter by export status: 0, 1, 'Exported', 'Not Exported'"),
     record_type: Optional[str] = Query(None, description="Filter by record type: demo, uploaded, discovered, sample"),
     verification_status: Optional[str] = Query(None, description="Filter by verification status: verified, unverified, demo"),
     source_page_type: Optional[str] = Query(None, description="Filter by verified source page type: buyer_procurement, seller_agency, portfolio, directory, unknown"),
@@ -169,6 +184,15 @@ def list_leads(
     p = int(getattr(page, "default", page)) if hasattr(page, "default") else int(page)
     ps = int(getattr(page_size, "default", page_size)) if hasattr(page_size, "default") else int(page_size)
     skip = (p - 1) * ps
+
+    parsed_is_exported: Optional[int] = None
+    if is_exported is not None and not hasattr(is_exported, "default"):
+        raw_exp = str(is_exported).strip().lower()
+        if raw_exp in ("1", "exported", "true"):
+            parsed_is_exported = 1
+        elif raw_exp in ("0", "not exported", "unexported", "false"):
+            parsed_is_exported = 0
+
     leads, total = get_leads(
         search=None if hasattr(search, "default") else search,
         category=None if hasattr(category, "default") else category,
@@ -176,7 +200,7 @@ def list_leads(
         buying_intent=None if hasattr(buying_intent, "default") else buying_intent,
         relevance=None if hasattr(relevance, "default") else relevance,
         status=None if hasattr(status, "default") else status,
-        is_exported=None if hasattr(is_exported, "default") else is_exported,
+        is_exported=parsed_is_exported,
         record_type=None if hasattr(record_type, "default") else record_type,
         verification_status=None if hasattr(verification_status, "default") else verification_status,
         source_page_type=None if hasattr(source_page_type, "default") else source_page_type,
@@ -426,7 +450,12 @@ def execute_discovery(payload: DiscoveryRequest):
                 cand["ingest_status"] = "unprocessed"
 
     # Persist the current discovery batch to SQLite discovery_staging table
-    save_discovery_staging_batch(candidates)
+    # Only stage genuine live discoveries, never demo or static benchmark candidates
+    live_to_stage = [
+        c for c in candidates
+        if c.get("is_live_discovery") and c.get("record_type") not in ("demo", "sample") and c.get("verification_status") != "demo"
+    ]
+    save_discovery_staging_batch(live_to_stage)
 
     stats["auto_analyzed"] = analyzed_count
     stats["already_in_pipeline"] = sum(1 for c in candidates if c.get("existing_lead_id"))
@@ -446,11 +475,16 @@ def get_current_discovery_batch():
     """
     Retrieves the currently staged discovery batch from SQLite.
     Survives page reloads and tab navigation.
+    Only returns genuine live discoveries, never static demonstration benchmarks.
     """
     candidates = get_discovery_staging_batch()
+    live_candidates = [
+        c for c in candidates
+        if c.get("is_live_discovery") and c.get("record_type") not in ("demo", "sample") and c.get("verification_status") != "demo"
+    ]
     return {
-        "candidates": candidates,
-        "count": len(candidates),
+        "candidates": live_candidates,
+        "count": len(live_candidates),
     }
 
 
@@ -527,10 +561,37 @@ def upload_csv(file: UploadFile = File(...)):
 
 
 @app.get("/api/export/csv", tags=["Export"])
-def export_csv(scope: str = Query("unexported", description="Export scope: unexported, processed, high_medium, all")):
-    """Generates a downloadable CSV export file for the selected scope."""
+def export_csv(
+    scope: str = Query("unexported", description="Export scope: unexported, processed, high_medium, all"),
+    lead_ids: Optional[str] = Query(None, description="Comma-separated lead IDs to export (optional)"),
+):
+    """Generates a downloadable CSV export file for the selected scope or specific lead IDs."""
     scope_str = str(getattr(scope, "default", scope)) if hasattr(scope, "default") else str(scope)
-    csv_bytes, lead_ids, count = generate_csv_bytes(scope_str)
+
+    parsed_ids: Optional[List[int]] = None
+    if lead_ids is not None:
+        raw_ids = [x.strip() for x in lead_ids.split(",") if x.strip()]
+        if not raw_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No leads selected. Please select at least one lead.",
+            )
+        try:
+            parsed_ids = [int(x) for x in raw_ids]
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid lead IDs provided. All IDs must be integers.",
+            )
+
+    csv_bytes, exported_lead_ids, count = generate_csv_bytes(scope_str, lead_ids=parsed_ids)
+
+    if count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No leads selected. Please select at least one lead.",
+        )
+
     filename = f"leads_export_{scope_str}_{datetime.date.today().strftime('%Y%m%d')}.csv"
 
     return StreamingResponse(
@@ -539,16 +600,43 @@ def export_csv(scope: str = Query("unexported", description="Export scope: unexp
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-Export-Count": str(count),
-            "X-Export-Ids": ",".join(str(i) for i in lead_ids[:100]),
+            "X-Export-Ids": ",".join(str(i) for i in exported_lead_ids[:100]),
         },
     )
 
 
 @app.get("/api/export/excel", tags=["Export"])
-def export_excel(scope: str = Query("unexported", description="Export scope: unexported, processed, high_medium, all")):
-    """Generates a styled, downloadable Excel (.xlsx) workbook for the selected scope."""
+def export_excel(
+    scope: str = Query("unexported", description="Export scope: unexported, processed, high_medium, all"),
+    lead_ids: Optional[str] = Query(None, description="Comma-separated lead IDs to export (optional)"),
+):
+    """Generates a styled, downloadable Excel (.xlsx) workbook for the selected scope or specific lead IDs."""
     scope_str = str(getattr(scope, "default", scope)) if hasattr(scope, "default") else str(scope)
-    excel_bytes, lead_ids, count = generate_excel_bytes(scope_str)
+
+    parsed_ids: Optional[List[int]] = None
+    if lead_ids is not None:
+        raw_ids = [x.strip() for x in lead_ids.split(",") if x.strip()]
+        if not raw_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No leads selected. Please select at least one lead.",
+            )
+        try:
+            parsed_ids = [int(x) for x in raw_ids]
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid lead IDs provided. All IDs must be integers.",
+            )
+
+    excel_bytes, exported_lead_ids, count = generate_excel_bytes(scope_str, lead_ids=parsed_ids)
+
+    if count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No leads selected. Please select at least one lead.",
+        )
+
     filename = f"leads_export_{scope_str}_{datetime.date.today().strftime('%Y%m%d')}.xlsx"
 
     return StreamingResponse(
@@ -557,7 +645,7 @@ def export_excel(scope: str = Query("unexported", description="Export scope: une
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-Export-Count": str(count),
-            "X-Export-Ids": ",".join(str(i) for i in lead_ids[:100]),
+            "X-Export-Ids": ",".join(str(i) for i in exported_lead_ids[:100]),
         },
     )
 

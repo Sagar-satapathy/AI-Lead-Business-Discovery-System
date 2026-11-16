@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Eye,
   CheckCircle,
+  Check,
   Clock,
   AlertCircle,
   Download,
@@ -26,11 +27,22 @@ interface LeadExplorerProps {
   onSelectLead: (lead: Lead) => void;
   onBatchAnalyze: (provider?: string) => void;
   onNavigateToDiscovery?: () => void;
+  onNavigateToExport?: () => void;
+  selectedLeadIds?: number[];
+  onSelectionChange?: (ids: number[]) => void;
   isEvaluating?: boolean;
 }
 
 const CATEGORIES = [
   'All',
+  'Financial Services',
+  'Healthcare',
+  'Medical & Life Sciences',
+  'Legal & Professional Services',
+  'Logistics & Supply Chain',
+  'Retail & E-commerce',
+  'Education & EdTech',
+  'Manufacturing & Industrial',
   'Website Development',
   'Mobile Application Development',
   'Web Application Development',
@@ -48,9 +60,37 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
   onSelectLead,
   onBatchAnalyze,
   onNavigateToDiscovery,
+  onNavigateToExport,
+  selectedLeadIds = [],
+  onSelectionChange,
   isEvaluating,
 }) => {
   const [selectedProvider, setSelectedProvider] = useState('auto');
+
+  const allPageSelected =
+    leads.length > 0 && leads.every((l) => selectedLeadIds.includes(l.id));
+  const somePageSelected =
+    leads.some((l) => selectedLeadIds.includes(l.id)) && !allPageSelected;
+
+  const handleToggleSelectAll = () => {
+    if (!onSelectionChange) return;
+    if (allPageSelected) {
+      const pageIds = new Set(leads.map((l) => l.id));
+      onSelectionChange(selectedLeadIds.filter((id) => !pageIds.has(id)));
+    } else {
+      const combined = new Set([...selectedLeadIds, ...leads.map((l) => l.id)]);
+      onSelectionChange(Array.from(combined));
+    }
+  };
+
+  const handleToggleSelectOne = (id: number) => {
+    if (!onSelectionChange) return;
+    if (selectedLeadIds.includes(id)) {
+      onSelectionChange(selectedLeadIds.filter((i) => i !== id));
+    } else {
+      onSelectionChange([...selectedLeadIds, id]);
+    }
+  };
 
   const handleResetFilters = () => {
     onFilterChange({
@@ -58,15 +98,15 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
       category: 'All',
       priority: 'All',
       buying_intent: 'All',
-      relevance: 'Relevant',
-      status: 'processed',
+      relevance: 'All',
+      status: 'All',
       is_exported: 'All',
-      record_type: 'discovered',
+      record_type: 'All',
       verification_status: 'All',
       source_page_type: 'All',
       order_by: 'score_desc',
       page: 1,
-      live_only: true,
+      live_only: false,
     });
   };
 
@@ -137,7 +177,7 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
               value={filters.category}
               onChange={(e) => onFilterChange({ category: e.target.value, page: 1 })}
             >
-              {CATEGORIES.map((cat) => (
+              {Array.from(new Set([...CATEGORIES, ...(filters.category && filters.category !== 'All' ? [filters.category] : [])])).map((cat) => (
                 <option key={cat} value={cat}>
                   {cat}
                 </option>
@@ -180,12 +220,18 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
             <label className="filter-label">Export Status</label>
             <select
               className="form-select"
-              value={filters.is_exported}
+              value={
+                filters.is_exported === '1' || filters.is_exported === 'Exported'
+                  ? 'Exported'
+                  : filters.is_exported === '0' || filters.is_exported === 'Not Exported' || filters.is_exported === 'unexported'
+                  ? 'Not Exported'
+                  : 'All'
+              }
               onChange={(e) => onFilterChange({ is_exported: e.target.value, page: 1 })}
             >
               <option value="All">All Export States</option>
-              <option value="0">Not Yet Exported (0)</option>
-              <option value="1">Already Exported (1)</option>
+              <option value="Exported">Exported</option>
+              <option value="Not Exported">Not Exported</option>
             </select>
           </div>
 
@@ -194,11 +240,18 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
             <label className="filter-label">Record Classification</label>
             <select
               className="form-select"
-              value={filters.record_type || 'discovered'}
-              onChange={(e) => onFilterChange({ record_type: e.target.value, page: 1 })}
+              value={filters.record_type || 'All'}
+              onChange={(e) => {
+                const val = e.target.value;
+                onFilterChange({
+                  record_type: val,
+                  live_only: val === 'discovered',
+                  page: 1,
+                });
+              }}
             >
+              <option value="All">All Saved Records</option>
               <option value="discovered">Live Discovered Opportunities</option>
-              <option value="All">All Live Qualified Opportunities</option>
             </select>
           </div>
 
@@ -269,20 +322,77 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
       {/* Leads Table Card */}
       <div className="table-card">
         <div className="table-header-info">
-          <span className="results-count-text">
-            Showing <strong>{leads.length}</strong> of <strong>{total}</strong> leads matching filters
-          </span>
-          <div className="page-size-selector">
-            <span className="text-muted text-xs">Per Page:</span>
-            {[10, 25, 50].map((size) => (
-              <button
-                key={size}
-                className={`page-size-btn ${filters.page_size === size ? 'active' : ''}`}
-                onClick={() => onFilterChange({ page_size: size, page: 1 })}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <span className="results-count-text">
+              Showing <strong>{leads.length}</strong> of <strong>{total}</strong> leads matching filters
+            </span>
+            {selectedLeadIds.length > 0 && (
+              <span
+                className="badge badge-primary text-xs"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 8px',
+                  backgroundColor: '#eff6ff',
+                  color: '#1d4ed8',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: '6px',
+                  fontWeight: 600,
+                }}
               >
-                {size}
+                <Check size={12} /> {selectedLeadIds.length} lead(s) selected
+                {onSelectionChange && (
+                  <button
+                    type="button"
+                    onClick={() => onSelectionChange([])}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#2563eb',
+                      cursor: 'pointer',
+                      fontSize: '0.75rem',
+                      textDecoration: 'underline',
+                      padding: '0 0 0 4px',
+                    }}
+                    title="Clear all selections"
+                  >
+                    Clear
+                  </button>
+                )}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {onNavigateToExport && selectedLeadIds.length > 0 && (
+              <button
+                type="button"
+                onClick={onNavigateToExport}
+                className="btn btn-primary btn-sm"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '0.8rem',
+                  padding: '5px 12px',
+                }}
+                title="Export selected leads in Export Intelligence"
+              >
+                <Download size={13} /> Export Selected ({selectedLeadIds.length})
               </button>
-            ))}
+            )}
+            <div className="page-size-selector">
+              <span className="text-muted text-xs">Per Page:</span>
+              {[10, 25, 50].map((size) => (
+                <button
+                  key={size}
+                  className={`page-size-btn ${filters.page_size === size ? 'active' : ''}`}
+                  onClick={() => onFilterChange({ page_size: size, page: 1 })}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -290,26 +400,39 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
           <table className="enterprise-table">
             <thead>
               <tr>
+                <th style={{ width: '40px' }} className="text-center">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all leads on this page"
+                    checked={allPageSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = somePageSelected;
+                    }}
+                    onChange={handleToggleSelectAll}
+                    style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    title={allPageSelected ? 'Deselect all on this page' : 'Select all on this page'}
+                  />
+                </th>
                 <th style={{ width: '60px' }}>ID</th>
                 <th style={{ minWidth: '180px' }}>Business Name</th>
                 <th style={{ minWidth: '160px' }}>Service Category</th>
                 <th style={{ width: '100px' }} className="text-center">Score</th>
                 <th style={{ width: '110px' }} className="text-center">Priority</th>
                 <th style={{ width: '120px' }}>Intent</th>
-                <th style={{ width: '110px' }}>Exported</th>
+                <th style={{ width: '130px' }} className="text-center">Export Status</th>
                 <th style={{ width: '90px' }} className="text-center">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-8">
+                  <td colSpan={9} className="text-center py-8">
                     <span className="spinner-icon"></span> Loading leads...
                   </td>
                 </tr>
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12">
+                  <td colSpan={9} className="text-center py-12">
                     <div className="empty-leads-notice" style={{ maxWidth: '480px', margin: '0 auto', textAlign: 'center' }}>
                       <div style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>🎯</div>
                       <h4 style={{ fontSize: '1.05rem', fontWeight: 600, marginBottom: '0.35rem' }}>
@@ -340,9 +463,18 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
                   return (
                     <tr
                       key={lead.id}
-                      className={`lead-row ${lead.is_exported === 0 && !isUnprocessed ? 'row-unexported' : ''}`}
+                      className={`lead-row ${selectedLeadIds.includes(lead.id) ? 'row-selected' : ''} ${lead.is_exported === 0 && !isUnprocessed ? 'row-unexported' : ''}`}
                       onClick={() => onSelectLead(lead)}
                     >
+                      <td className="text-center" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select lead ${lead.id}`}
+                          checked={selectedLeadIds.includes(lead.id)}
+                          onChange={() => handleToggleSelectOne(lead.id)}
+                          style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                        />
+                      </td>
                       <td className="text-muted font-mono text-xs">#{lead.id}</td>
                       <td>
                         <div className="business-cell">
@@ -446,14 +578,14 @@ export const LeadExplorer: React.FC<LeadExplorerProps> = ({
                           {lead.buying_intent || 'Unclear'}
                         </span>
                       </td>
-                      <td>
-                        {lead.is_exported === 1 ? (
+                      <td className="text-center">
+                        {Number(lead.is_exported) === 1 ? (
                           <span className="badge badge-exported" title={lead.exported_at ? `Exported at ${lead.exported_at}` : 'Exported'}>
                             <CheckCircle size={12} /> Exported
                           </span>
                         ) : (
                           <span className="badge badge-not-exported" title="Not yet exported">
-                            <Clock size={12} /> Unexported
+                            <Clock size={12} /> Not Exported
                           </span>
                         )}
                       </td>

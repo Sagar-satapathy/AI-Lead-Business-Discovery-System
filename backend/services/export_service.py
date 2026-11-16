@@ -53,29 +53,29 @@ COLUMN_DISPLAY_NAMES = {
 }
 
 
-def get_scoped_dataframe(scope: str) -> pd.DataFrame:
-    """Retrieves and prepares the DataFrame for the requested export scope."""
+def get_scoped_dataframe(scope: str, lead_ids: Optional[List[int]] = None) -> pd.DataFrame:
+    """Retrieves and prepares the DataFrame for the requested export scope or specific lead IDs."""
     scope_clean = scope.lower().strip()
     if scope_clean not in EXPORT_SCOPES:
         scope_clean = "unexported"
 
-    df = get_export_dataframe(scope_clean)
+    df = get_export_dataframe(scope_clean, lead_ids=lead_ids)
     return df
 
 
-def generate_csv_bytes(scope: str) -> Tuple[bytes, List[int], int]:
+def generate_csv_bytes(scope: str, lead_ids: Optional[List[int]] = None) -> Tuple[bytes, List[int], int]:
     """
     Generates a CSV export with UTF-8 BOM for universal Excel and CRM compatibility.
     Returns (csv_bytes, exported_lead_ids, record_count).
     """
-    df = get_scoped_dataframe(scope)
+    df = get_scoped_dataframe(scope, lead_ids=lead_ids)
     if df.empty:
         # Return empty CSV with standard headers
         empty_df = pd.DataFrame(columns=list(COLUMN_DISPLAY_NAMES.values()))
         csv_str = empty_df.to_csv(index=False)
         return csv_str.encode("utf-8-sig"), [], 0
 
-    lead_ids = df["id"].tolist() if "id" in df.columns else []
+    lead_ids_res = df["id"].tolist() if "id" in df.columns else []
 
     # Map column names to friendly display titles where available
     export_cols = [c for c in COLUMN_DISPLAY_NAMES.keys() if c in df.columns]
@@ -84,17 +84,17 @@ def generate_csv_bytes(scope: str) -> Tuple[bytes, List[int], int]:
 
     # Encode with UTF-8 BOM
     csv_bytes = df_export.to_csv(index=False).encode("utf-8-sig")
-    return csv_bytes, lead_ids, len(df_export)
+    return csv_bytes, lead_ids_res, len(df_export)
 
 
-def generate_excel_bytes(scope: str) -> Tuple[bytes, List[int], int]:
+def generate_excel_bytes(scope: str, lead_ids: Optional[List[int]] = None) -> Tuple[bytes, List[int], int]:
     """
     Generates an enterprise-styled .xlsx workbook using openpyxl.
     Applies deep navy headers, alternating row styles, status badges, and column auto-width.
     Returns (excel_bytes, exported_lead_ids, record_count).
     """
-    df = get_scoped_dataframe(scope)
-    lead_ids = df["id"].tolist() if "id" in df.columns else []
+    df = get_scoped_dataframe(scope, lead_ids=lead_ids)
+    lead_ids_res = df["id"].tolist() if "id" in df.columns else []
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -187,4 +187,4 @@ def generate_excel_bytes(scope: str) -> Tuple[bytes, List[int], int]:
     excel_bytes = buffer.getvalue()
     buffer.close()
 
-    return excel_bytes, lead_ids, len(df)
+    return excel_bytes, lead_ids_res, len(df)

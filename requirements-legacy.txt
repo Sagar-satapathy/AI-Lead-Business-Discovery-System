@@ -1,0 +1,5 @@
+# Legacy Streamlit Application Dependencies
+# Use only if running legacy local Streamlit app: pip install -r requirements-legacy.txt
+
+-r requirements.txt
+streamlit>=1.40.0

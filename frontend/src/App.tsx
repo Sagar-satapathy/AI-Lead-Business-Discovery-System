@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
+  LayoutDashboard,
   Users,
   Compass,
   UploadCloud,
@@ -13,9 +14,11 @@ import {
   DashboardMetrics,
   HealthStatus,
   LeadFilterState,
+  DiscoveryResult,
 } from './types';
 import { api } from './services/api';
 import { Navbar } from './components/Navbar';
+import { DashboardSection } from './components/DashboardSection';
 import { KPISection } from './components/KPISection';
 import { LeadExplorer } from './components/LeadExplorer';
 import { DiscoverySection } from './components/DiscoverySection';
@@ -29,8 +32,8 @@ export const App: React.FC = () => {
     return localStorage.getItem('theme') === 'dark';
   });
 
-  // Active Tab
-  const [activeTab, setActiveTab] = useState<'explorer' | 'discovery' | 'ingestion' | 'export'>('discovery');
+  // Active Tab: Added dedicated 'dashboard' as primary view
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'explorer' | 'discovery' | 'ingestion' | 'export'>('dashboard');
 
   // Core Data States
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -38,6 +41,7 @@ export const App: React.FC = () => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [totalLeads, setTotalLeads] = useState<number>(0);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<number[]>([]);
 
   // Loading States
   const [loadingLeads, setLoadingLeads] = useState<boolean>(true);
@@ -45,21 +49,41 @@ export const App: React.FC = () => {
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Filters State - Default to genuine live-discovered leads
+  // Lifted Discovery State (persists across tab navigation and browser refresh)
+  const [discoveryState, setDiscoveryState] = useState<string>(() => {
+    return sessionStorage.getItem('discovery_state') || '';
+  });
+  const [discoveryCategory, setDiscoveryCategory] = useState<string>(() => {
+    return sessionStorage.getItem('discovery_category') || '';
+  });
+  const [discoveryService, setDiscoveryService] = useState<string>(() => {
+    return sessionStorage.getItem('discovery_service') || '';
+  });
+  const [discoveryResult, setDiscoveryResult] = useState<DiscoveryResult | null>(() => {
+    try {
+      const saved = sessionStorage.getItem('discovery_result');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Filters State - Default to unfiltered saved records so count matches Dashboard Total Leads exactly
   const [filters, setFilters] = useState<LeadFilterState>({
     search: '',
     category: 'All',
     priority: 'All',
     buying_intent: 'All',
-    relevance: 'Relevant',
-    status: 'processed',
+    relevance: 'All',
+    status: 'All',
     is_exported: 'All',
-    record_type: 'discovered',
+    record_type: 'All',
     verification_status: 'All',
+    source_page_type: 'All',
     order_by: 'score_desc',
     page: 1,
     page_size: 25,
-    live_only: true,
+    live_only: false,
   });
 
   // Theme Toggle
@@ -114,6 +138,15 @@ export const App: React.FC = () => {
     loadLeads();
   }, [loadLeads]);
 
+  useEffect(() => {
+    if (activeTab === 'dashboard') {
+      loadSystemData();
+      loadLeads();
+    } else if (activeTab === 'explorer') {
+      loadLeads();
+    }
+  }, [activeTab, loadSystemData, loadLeads]);
+
   const showNotification = (type: 'success' | 'error', message: string) => {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 5000);
@@ -123,29 +156,37 @@ export const App: React.FC = () => {
     setFilters((prev) => ({ ...prev, ...newFilters }));
   };
 
+  // Navigate to Lead Explorer with optional custom filter criteria (e.g. from Dashboard KPI cards)
+  const handleNavigateToExplorer = (customFilters?: Partial<LeadFilterState>) => {
+    if (customFilters) {
+      setFilters((prev) => ({
+        ...prev,
+        ...customFilters,
+        page: 1,
+      }));
+    }
+    setActiveTab('explorer');
+  };
+
   // KPI Quick filter shortcuts
   const handleFilterUnexported = () => {
-    setActiveTab('explorer');
-    setFilters((prev) => ({
-      ...prev,
+    handleNavigateToExplorer({
       is_exported: '0',
       status: 'processed',
       relevance: 'Relevant',
       live_only: true,
       page: 1,
-    }));
+    });
   };
 
   const handleFilterHighPriority = () => {
-    setActiveTab('explorer');
-    setFilters((prev) => ({
-      ...prev,
+    handleNavigateToExplorer({
       priority: 'High',
       status: 'processed',
       relevance: 'Relevant',
       live_only: true,
       page: 1,
-    }));
+    });
   };
 
   // Batch Evaluation Action
@@ -201,16 +242,16 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Global KPI Metrics Header */}
-        <KPISection
-          metrics={metrics}
-          loading={loadingMetrics}
-          onFilterUnexported={handleFilterUnexported}
-          onFilterHighPriority={handleFilterHighPriority}
-        />
-
-        {/* Core Workflow Navigation Tabs */}
+        {/* Core Workflow Navigation Tabs - REQUIREMENT 1: Added Separate Dedicated Dashboard Item */}
         <div className="tab-navigation-container">
+          <button
+            className={`nav-tab ${activeTab === 'dashboard' ? 'nav-tab-active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+          >
+            <LayoutDashboard size={16} />
+            <span>Dashboard</span>
+          </button>
+
           <button
             className={`nav-tab ${activeTab === 'discovery' ? 'nav-tab-active' : ''}`}
             onClick={() => setActiveTab('discovery')}
@@ -234,15 +275,31 @@ export const App: React.FC = () => {
           >
             <Download size={16} />
             <span>Export Intelligence</span>
-            {metrics && metrics.not_yet_exported > 0 && (
+            {selectedLeadIds.length > 0 ? (
+              <span className="tab-badge-accent" title={`${selectedLeadIds.length} lead(s) selected for export`}>
+                {selectedLeadIds.length}
+              </span>
+            ) : metrics && metrics.not_yet_exported > 0 ? (
               <span className="tab-badge-accent">{metrics.not_yet_exported}</span>
-            )}
+            ) : null}
           </button>
         </div>
 
         {/* Active Tab Workspace */}
         <div className="tab-workspace">
-          {activeTab === 'explorer' && (
+          {/* REQUIREMENT 1: Dedicated Dashboard Section */}
+          <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
+            <DashboardSection
+              metrics={metrics}
+              loading={loadingMetrics}
+              onNavigateToExplorer={handleNavigateToExplorer}
+              onNavigateToDiscovery={() => setActiveTab('discovery')}
+              onInspectLead={handleInspectLeadById}
+              onRefresh={handleRefreshAll}
+            />
+          </div>
+
+          <div style={{ display: activeTab === 'explorer' ? 'block' : 'none' }}>
             <LeadExplorer
               leads={leads}
               total={totalLeads}
@@ -252,11 +309,14 @@ export const App: React.FC = () => {
               onSelectLead={(lead) => setSelectedLead(lead)}
               onBatchAnalyze={handleBatchAnalyze}
               onNavigateToDiscovery={() => setActiveTab('discovery')}
+              onNavigateToExport={() => setActiveTab('export')}
+              selectedLeadIds={selectedLeadIds}
+              onSelectionChange={setSelectedLeadIds}
               isEvaluating={isEvaluating}
             />
-          )}
+          </div>
 
-          {activeTab === 'discovery' && (
+          <div style={{ display: activeTab === 'discovery' ? 'block' : 'none' }}>
             <DiscoverySection
               isLiveConnected={Boolean(health?.discovery?.live_search_configured)}
               onDiscoveryComplete={() => {
@@ -264,27 +324,38 @@ export const App: React.FC = () => {
                 loadLeads();
               }}
               onInspectLead={handleInspectLeadById}
+              state={discoveryState}
+              setState={setDiscoveryState}
+              category={discoveryCategory}
+              setCategory={setDiscoveryCategory}
+              service={discoveryService}
+              setService={setDiscoveryService}
+              result={discoveryResult}
+              setResult={setDiscoveryResult}
             />
-          )}
+          </div>
 
-          {activeTab === 'ingestion' && (
+          <div style={{ display: activeTab === 'ingestion' ? 'block' : 'none' }}>
             <IngestionSection
               onIngestionComplete={() => {
                 loadSystemData();
                 loadLeads();
               }}
             />
-          )}
+          </div>
 
-          {activeTab === 'export' && (
+          <div style={{ display: activeTab === 'export' ? 'block' : 'none' }}>
             <ExportSection
               metrics={metrics}
+              selectedLeadIds={selectedLeadIds}
+              onClearSelection={() => setSelectedLeadIds([])}
+              onNavigateToExplorer={() => setActiveTab('explorer')}
               onExportConfirmed={() => {
                 loadSystemData();
                 loadLeads();
               }}
             />
-          )}
+          </div>
         </div>
       </main>
 

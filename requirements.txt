@@ -1,8 +1,6 @@
-# AI Lead Business Discovery System Dependencies
+# AI Lead Business Discovery System - Production Dependencies
 # Compatible with Python 3.10, 3.11, 3.12, 3.13
-
-# Core Streamlit Application
-streamlit>=1.40.0
+# Automatically installed by Vercel for Serverless Functions
 
 # Enterprise FastAPI Backend & Server
 fastapi>=0.110.0
@@ -19,3 +17,6 @@ openpyxl>=3.1.0
 
 # Environment & Secrets Management
 python-dotenv>=1.0.0
+
+# Database & PostgreSQL
+psycopg2-binary>=2.9.9

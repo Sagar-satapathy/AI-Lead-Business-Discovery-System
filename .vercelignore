@@ -1,0 +1,42 @@
+# Secrets and environment variables (Must NEVER be uploaded)
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+leads.db
+
+# Legacy Streamlit UI and configurations
+.streamlit/
+app.py
+test_system.py
+requirements-legacy.txt
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Test suites and development scripts
+backend/tests/
+backend/scripts/*.json
+
+# Node dependencies and build artifacts (built fresh on Vercel)
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.log
+
+# Git internals and documentation
+.git/
+.gitignore
+README*.md
+
+# Virtual environments
+venv/
+.venv/
+env/

@@ -30,7 +30,7 @@ SAFE_ORDER_BY: Dict[str, str] = {
 
 
 def is_postgres() -> bool:
-    url = settings.DATABASE_URL.lower()
+    url = (settings.DATABASE_URL or "").lower()
     return url.startswith("postgresql://") or url.startswith("postgres://")
 
 
@@ -49,9 +49,18 @@ def get_connection():
         except ImportError:
             raise RuntimeError("psycopg2 is required when using a PostgreSQL DATABASE_URL. Please run: pip install psycopg2-binary")
     else:
-        # SQLite
-        path = settings.DATABASE_URL.replace("sqlite:///", "")
-        if not os.path.isabs(path):
+        # Safety enforcement: Block silent SQLite fallback in production / on Vercel
+        if settings.IS_PRODUCTION or settings.IS_VERCEL:
+            raise RuntimeError(
+                "CRITICAL: DATABASE_URL environment variable is mandatory in production / on Vercel. "
+                "SQLite fallback is disabled in production to protect data integrity. "
+                "Please configure your Neon PostgreSQL connection string (DATABASE_URL) in Vercel Project Settings."
+            )
+        # SQLite (local development only)
+        path = (settings.DATABASE_URL or "").replace("sqlite:///", "")
+        if not path:
+            path = os.path.join(BASE_DIR, "leads.db")
+        elif not os.path.isabs(path):
             path = os.path.join(BASE_DIR, path)
         conn = sqlite3.connect(path, timeout=10.0)
         conn.row_factory = sqlite3.Row
@@ -63,6 +72,11 @@ def get_connection():
 
 def init_database() -> None:
     """Ensures tables, indexes, and migrations exist."""
+    if (settings.IS_PRODUCTION or settings.IS_VERCEL) and not is_postgres():
+        raise RuntimeError(
+            "CRITICAL: DATABASE_URL is not set for PostgreSQL in production / on Vercel. "
+            "Cannot initialize SQLite database in production."
+        )
     with get_connection() as conn:
         cursor = conn.cursor()
         if is_postgres():
@@ -95,6 +109,12 @@ def init_database() -> None:
                     publication_date TEXT,
                     verified_at TIMESTAMP,
                     verification_notes TEXT,
+                    provider_name TEXT,
+                    source_domain TEXT,
+                    discovered_at TIMESTAMP,
+                    is_live_discovery INTEGER DEFAULT 0,
+                    search_query TEXT,
+                    evidence_text TEXT,
                     source_fetch_status TEXT,
                     source_page_type TEXT,
                     source_verified_at TIMESTAMP,
@@ -110,6 +130,20 @@ def init_database() -> None:
                 CREATE INDEX IF NOT EXISTS idx_is_exported ON leads(is_exported);
                 CREATE INDEX IF NOT EXISTS idx_record_type ON leads(record_type);
                 CREATE INDEX IF NOT EXISTS idx_verification_status ON leads(verification_status);
+                CREATE INDEX IF NOT EXISTS idx_source_page_type ON leads(source_page_type);
+
+                -- Idempotent column migrations for existing PostgreSQL tables
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS provider_name TEXT;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_domain TEXT;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMP;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS is_live_discovery INTEGER DEFAULT 0;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS search_query TEXT;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS evidence_text TEXT;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_fetch_status TEXT;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_page_type TEXT;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_verified_at TIMESTAMP;
+                ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_evidence_snippet TEXT;
+
                 CREATE TABLE IF NOT EXISTS discovery_staging (
                     id SERIAL PRIMARY KEY,
                     business_name TEXT NOT NULL,
@@ -254,14 +288,15 @@ def init_database() -> None:
                 """
             )
 
-            # 3. Idempotent classification of previous test auto-ingested records (IDs > 27)
+            # 3. Idempotent classification of historical test auto-ingested records (IDs 253 to 316)
             cursor.execute(
                 """
                 UPDATE leads
                 SET record_type = 'sample',
                     verification_status = 'unverified',
                     verification_notes = 'Auto-ingested during previous test from sample directory; unverified source'
-                WHERE id > 27
+                WHERE id > 27 AND id <= 316
+                  AND (record_type IS NULL OR record_type NOT IN ('discovered', 'live_discovery'))
                   AND (verification_notes IS NULL OR verification_notes = '');
                 """
             )
@@ -399,8 +434,14 @@ def get_leads(
 
     if is_exported is not None and not hasattr(is_exported, "default"):
         try:
-            conditions.append(f"is_exported = {param_char}")
-            params.append(int(is_exported))
+            if isinstance(is_exported, str) and not is_exported.isdigit():
+                norm_exp = is_exported.strip().lower()
+                val = 1 if norm_exp in ("exported", "true") else (0 if norm_exp in ("not exported", "unexported", "false") else None)
+            else:
+                val = int(is_exported)
+            if val is not None:
+                conditions.append(f"is_exported = {param_char}")
+                params.append(val)
         except (ValueError, TypeError):
             pass
 
@@ -521,6 +562,10 @@ def insert_lead(
     """
     init_database()
     param_char = "%s" if is_postgres() else "?"
+    norm_verified_at = verified_at if verified_at and str(verified_at).strip() else None
+    norm_discovered_at = discovered_at if discovered_at and str(discovered_at).strip() else None
+    norm_source_verified_at = source_verified_at if source_verified_at and str(source_verified_at).strip() else None
+
     with get_connection() as conn:
         cursor = conn.cursor()
         try:
@@ -549,17 +594,17 @@ def insert_lead(
                         verification_status.strip(),
                         source_title.strip(),
                         publication_date.strip(),
-                        verified_at,
+                        norm_verified_at,
                         verification_notes.strip(),
                         provider_name.strip(),
                         source_domain.strip(),
-                        discovered_at,
+                        norm_discovered_at,
                         live_disc_val,
                         search_query.strip(),
                         evidence_text.strip(),
                         source_fetch_status,
                         source_page_type,
-                        source_verified_at,
+                        norm_source_verified_at,
                         source_evidence_snippet,
                     ),
                 )
@@ -587,17 +632,17 @@ def insert_lead(
                         verification_status.strip(),
                         source_title.strip(),
                         publication_date.strip(),
-                        verified_at,
+                        norm_verified_at,
                         verification_notes.strip(),
                         provider_name.strip(),
                         source_domain.strip(),
-                        discovered_at,
+                        norm_discovered_at,
                         live_disc_val,
                         search_query.strip(),
                         evidence_text.strip(),
                         source_fetch_status,
                         source_page_type,
-                        source_verified_at,
+                        norm_source_verified_at,
                         source_evidence_snippet,
                     ),
                 )
@@ -618,9 +663,25 @@ def insert_lead(
                 pass
             return False, existing_id, "A lead with this business name and requirement already exists."
         except Exception as e:
-            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            # Check for PostgreSQL psycopg2.IntegrityError or general unique constraint error
+            is_unique_violation = False
+            try:
+                import psycopg2
+                if isinstance(e, psycopg2.IntegrityError):
+                    is_unique_violation = True
+            except ImportError:
+                pass
+
+            if not is_unique_violation:
+                err_str = str(e).lower()
+                is_unique_violation = "unique" in err_str or "duplicate" in err_str or "idx_unique_lead" in err_str
+
+            if is_unique_violation:
                 existing_id = None
                 try:
+                    # In PostgreSQL, an aborted transaction block requires rollback before executing a new query
+                    if is_postgres():
+                        conn.rollback()
                     cursor.execute(
                         f"SELECT id FROM leads WHERE business_name = {param_char} AND requirement = {param_char}",
                         (business_name.strip(), requirement.strip()),
@@ -642,6 +703,11 @@ def update_lead_analysis(
     """Updates a lead record with genuine AI classification and explainable score."""
     init_database()
     param_char = "%s" if is_postgres() else "?"
+    bd = scoring.get("score_breakdown") or scoring.get("breakdown") or {}
+    bd_str = json.dumps(bd) if isinstance(bd, (dict, list)) else str(bd)
+    exp = scoring.get("explanation") or scoring.get("score_explanation") or ""
+    exp_str = json.dumps(exp) if isinstance(exp, (dict, list)) else str(exp)
+
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -669,8 +735,8 @@ def update_lead_analysis(
                 ai_analysis.get("evidence", ""),
                 scoring.get("total_score", 0),
                 scoring.get("priority", "Low"),
-                json.dumps(scoring.get("score_breakdown", {})),
-                scoring.get("explanation", ""),
+                bd_str,
+                exp_str,
                 lead_id,
             ),
         )
@@ -793,9 +859,12 @@ def get_dashboard_metrics() -> Dict[str, Any]:
         "potential_intent_leads": 0,
         "unclear_intent_leads": 0,
         "not_yet_exported": 0,
+        "exported_leads": 0,
         "category_counts": {},
         "priority_counts": {},
         "intent_counts": {},
+        "service_breakdown": [],
+        "high_priority_opportunities": [],
     }
 
     with get_connection() as conn:
@@ -805,52 +874,187 @@ def get_dashboard_metrics() -> Dict[str, Any]:
             cursor.execute(sql)
             r = cursor.fetchone()
             if isinstance(r, (list, tuple)):
-                return r[0]
-            if isinstance(r, dict):
-                return list(r.values())[0]
+                return r[0] if r else 0
+            if isinstance(r, dict) or hasattr(r, "values"):
+                vals = list(r.values())
+                return vals[0] if vals else 0
             return r[0] if r else 0
 
+        # KPI 1: Total Leads - Count all saved records from the leads table in Neon PostgreSQL
         metrics["total_records"] = fetch_val("SELECT COUNT(*) FROM leads")
-        metrics["processed_records"] = fetch_val("SELECT COUNT(*) FROM leads WHERE status = 'processed'")
-        metrics["unprocessed_records"] = fetch_val("SELECT COUNT(*) FROM leads WHERE status = 'unprocessed'")
-        metrics["failed_records"] = fetch_val("SELECT COUNT(*) FROM leads WHERE status = 'failed'")
-        metrics["relevant_opportunities"] = fetch_val("SELECT COUNT(*) FROM leads WHERE relevance = 'Relevant' AND status = 'processed'")
-        metrics["high_priority_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE priority = 'High' AND status = 'processed'")
-        metrics["medium_priority_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE priority = 'Medium' AND status = 'processed'")
-        metrics["low_priority_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE priority = 'Low' AND status = 'processed'")
-        metrics["active_intent_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE buying_intent = 'Active' AND status = 'processed'")
-        metrics["potential_intent_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE buying_intent = 'Potential' AND status = 'processed'")
-        metrics["unclear_intent_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE buying_intent = 'Unclear' AND status = 'processed'")
-        metrics["not_yet_exported"] = fetch_val("SELECT COUNT(*) FROM leads WHERE is_exported = 0 AND status = 'processed'")
-        metrics["verified_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE verification_status = 'verified'")
-        metrics["unverified_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE verification_status = 'unverified'")
-        metrics["demo_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE record_type = 'demo'")
-        metrics["discovered_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE record_type = 'discovered'")
+        metrics["processed_records"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(status)) = 'processed'")
+        metrics["unprocessed_records"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(status)) = 'unprocessed'")
+        metrics["failed_records"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(status)) = 'failed'")
+        metrics["relevant_opportunities"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(relevance)) = 'relevant'")
 
-        # Category Breakdown
-        cursor.execute("SELECT category, COUNT(*) FROM leads WHERE status = 'processed' GROUP BY category ORDER BY COUNT(*) DESC")
+        # KPI 3: High Priority Leads - Count leads classified as high priority
+        metrics["high_priority_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(priority)) = 'high'")
+
+        # KPI 4: Medium Priority Leads - Count leads classified as medium priority
+        metrics["medium_priority_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(priority)) = 'medium'")
+
+        # Low Priority Leads
+        metrics["low_priority_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(priority)) = 'low'")
+
+        # KPI 2: Active Buying Intent - Count leads classified with active buying intent
+        metrics["active_intent_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(buying_intent)) = 'active'")
+
+        # KPI 5: Potential Buying Intent - Count leads classified as potential buying intent
+        metrics["potential_intent_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(buying_intent)) = 'potential'")
+
+        # Unclear / other intent
+        metrics["unclear_intent_leads"] = fetch_val(
+            "SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(buying_intent)) = 'unclear' OR buying_intent IS NULL OR TRIM(buying_intent) = ''"
+        )
+
+        # Export status
+        metrics["not_yet_exported"] = fetch_val("SELECT COUNT(*) FROM leads WHERE is_exported = 0")
+        metrics["exported_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE is_exported = 1")
+
+        metrics["verified_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(verification_status)) = 'verified'")
+        metrics["unverified_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(verification_status)) = 'unverified'")
+        metrics["demo_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(record_type)) = 'demo'")
+        metrics["discovered_leads"] = fetch_val("SELECT COUNT(*) FROM leads WHERE LOWER(TRIM(record_type)) IN ('discovered', 'live_discovery')")
+
+        # Category Breakdown - Group saved leads by category
+        cursor.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(category), ''), 'Uncategorized') as cat, COUNT(*) as cnt
+            FROM leads
+            GROUP BY COALESCE(NULLIF(TRIM(category), ''), 'Uncategorized')
+            ORDER BY COUNT(*) DESC
+            """
+        )
         cat_rows = cursor.fetchall()
-        metrics["category_counts"] = {r[0]: r[1] for r in cat_rows} if cat_rows else {}
+        metrics["category_counts"] = {
+            (r["cat"] if isinstance(r, dict) or hasattr(r, "keys") else r[0]): int(r["cnt"] if isinstance(r, dict) or hasattr(r, "keys") else r[1])
+            for r in cat_rows
+        } if cat_rows else {}
 
         # Priority Breakdown
-        cursor.execute("SELECT priority, COUNT(*) FROM leads WHERE status = 'processed' GROUP BY priority")
+        cursor.execute(
+            """
+            SELECT
+                CASE
+                    WHEN LOWER(TRIM(priority)) = 'high' THEN 'High'
+                    WHEN LOWER(TRIM(priority)) = 'medium' THEN 'Medium'
+                    WHEN LOWER(TRIM(priority)) = 'low' THEN 'Low'
+                    ELSE 'Low'
+                END as prio,
+                COUNT(*) as cnt
+            FROM leads
+            GROUP BY prio
+            ORDER BY cnt DESC
+            """
+        )
         prio_rows = cursor.fetchall()
-        metrics["priority_counts"] = {r[0]: r[1] for r in prio_rows} if prio_rows else {}
+        metrics["priority_counts"] = {
+            (r["prio"] if isinstance(r, dict) or hasattr(r, "keys") else r[0]): int(r["cnt"] if isinstance(r, dict) or hasattr(r, "keys") else r[1])
+            for r in prio_rows
+        } if prio_rows else {}
 
         # Intent Breakdown
-        cursor.execute("SELECT buying_intent, COUNT(*) FROM leads WHERE status = 'processed' GROUP BY buying_intent")
+        cursor.execute(
+            """
+            SELECT
+                CASE
+                    WHEN LOWER(TRIM(buying_intent)) = 'active' THEN 'Active'
+                    WHEN LOWER(TRIM(buying_intent)) = 'potential' THEN 'Potential'
+                    WHEN LOWER(TRIM(buying_intent)) = 'unclear' THEN 'Unclear'
+                    ELSE 'Unclear'
+                END as intent,
+                COUNT(*) as cnt
+            FROM leads
+            GROUP BY intent
+            ORDER BY cnt DESC
+            """
+        )
         intent_rows = cursor.fetchall()
-        metrics["intent_counts"] = {r[0]: r[1] for r in intent_rows} if intent_rows else {}
+        metrics["intent_counts"] = {
+            (r["intent"] if isinstance(r, dict) or hasattr(r, "keys") else r[0]): int(r["cnt"] if isinstance(r, dict) or hasattr(r, "keys") else r[1])
+            for r in intent_rows
+        } if intent_rows else {}
+
+        # Section C: Service-wise Lead Analysis
+        cursor.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(TRIM(category), ''), 'Uncategorized') as service_category,
+                COUNT(*) as total_leads,
+                COUNT(CASE WHEN LOWER(TRIM(priority)) = 'high' THEN 1 END) as high_priority_leads,
+                COUNT(CASE WHEN LOWER(TRIM(priority)) = 'medium' THEN 1 END) as medium_priority_leads,
+                COUNT(CASE WHEN LOWER(TRIM(priority)) = 'low' THEN 1 END) as low_priority_leads
+            FROM leads
+            GROUP BY COALESCE(NULLIF(TRIM(category), ''), 'Uncategorized')
+            ORDER BY total_leads DESC, high_priority_leads DESC
+            """
+        )
+        service_rows = cursor.fetchall()
+        metrics["service_breakdown"] = [
+            {
+                "service_category": str(r["service_category"] if hasattr(r, "keys") or isinstance(r, dict) else r[0]),
+                "total_leads": int(r["total_leads"] if hasattr(r, "keys") or isinstance(r, dict) else r[1]),
+                "high_priority_leads": int(r["high_priority_leads"] if hasattr(r, "keys") or isinstance(r, dict) else r[2]),
+                "medium_priority_leads": int(r["medium_priority_leads"] if hasattr(r, "keys") or isinstance(r, dict) else r[3]),
+                "low_priority_leads": int(r["low_priority_leads"] if hasattr(r, "keys") or isinstance(r, dict) else r[4]),
+            }
+            for r in service_rows
+        ] if service_rows else []
+
+        # Section D: High-Priority Opportunities
+        cursor.execute(
+            """
+            SELECT
+                id,
+                business_name,
+                category,
+                buying_intent,
+                lead_score,
+                relevance,
+                priority,
+                location,
+                date_found,
+                is_exported,
+                summary
+            FROM leads
+            WHERE LOWER(TRIM(priority)) = 'high'
+            ORDER BY lead_score DESC, id DESC
+            LIMIT 10
+            """
+        )
+        high_rows = cursor.fetchall()
+        metrics["high_priority_opportunities"] = [
+            {
+                "id": int(r["id"] if hasattr(r, "keys") or isinstance(r, dict) else r[0]),
+                "business_name": str(r["business_name"] if hasattr(r, "keys") or isinstance(r, dict) else r[1]),
+                "category": str(r["category"] if hasattr(r, "keys") or isinstance(r, dict) else r[2] or "Uncategorized"),
+                "buying_intent": str(r["buying_intent"] if hasattr(r, "keys") or isinstance(r, dict) else r[3] or "Unclear"),
+                "lead_score": int(r["lead_score"] if hasattr(r, "keys") or isinstance(r, dict) else r[4] or 0),
+                "relevance": str(r["relevance"] if hasattr(r, "keys") or isinstance(r, dict) else r[5] or "Pending"),
+                "priority": str(r["priority"] if hasattr(r, "keys") or isinstance(r, dict) else r[6] or "High"),
+                "location": str(r["location"] if hasattr(r, "keys") or isinstance(r, dict) else (r[7] if len(r) > 7 else "") or ""),
+                "date_found": str(r["date_found"] if hasattr(r, "keys") or isinstance(r, dict) else (r[8] if len(r) > 8 else "") or ""),
+                "is_exported": int(r["is_exported"] if hasattr(r, "keys") or isinstance(r, dict) else (r[9] if len(r) > 9 else 0) or 0),
+                "summary": str(r["summary"] if hasattr(r, "keys") or isinstance(r, dict) else (r[10] if len(r) > 10 else "") or ""),
+            }
+            for r in high_rows
+        ] if high_rows else []
+
+    return metrics
 
     return metrics
 
 
-def get_export_dataframe(scope: str = "all", include_historical: bool = False) -> pd.DataFrame:
+def get_export_dataframe(
+    scope: str = "all",
+    include_historical: bool = False,
+    lead_ids: Optional[List[int]] = None,
+) -> pd.DataFrame:
     """
     Returns filtered DataFrame sorted by id ASC for CSV and Excel export.
     Excludes historical demo, sample, and uploaded records from all normal organization exports,
     ensuring only genuine live-discovered, processed, relevant, and verified leads are exported.
-    Prevents duplicate exports when scope='unexported'.
+    Prevents duplicate exports when scope='unexported'. Supports explicit lead_ids filtering.
     """
     init_database()
 
@@ -872,37 +1076,72 @@ def get_export_dataframe(scope: str = "all", include_historical: bool = False) -
 
     scope_clean = str(getattr(scope, "default", scope)).lower().strip() if hasattr(scope, "default") else str(scope).lower().strip()
 
-    if include_historical and scope_clean == "all":
-        # Internal test/system debug bypass only
-        where = ""
-    elif scope_clean == "unexported":
-        # Prevent duplicate exports: only genuine leads with is_exported = 0
-        where = f"WHERE {live_qualified_filter} AND is_exported = 0"
-    elif scope_clean in ("processed", "all"):
-        # Normal organization export: all genuine live-discovered, processed, relevant leads
-        where = f"WHERE {live_qualified_filter}"
-    elif scope_clean == "high_medium":
-        where = f"WHERE {live_qualified_filter} AND priority IN ('High', 'Medium')"
-    elif scope_clean == "high_priority":
-        where = f"WHERE {live_qualified_filter} AND priority = 'High'"
-    elif scope_clean == "relevant":
-        where = f"WHERE {live_qualified_filter}"
+    params: Any = None
+    if lead_ids is not None:
+        if len(lead_ids) == 0:
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM leads WHERE 1=0")
+                colnames = [desc[0] for desc in cursor.description]
+                return pd.DataFrame(columns=colnames)
+
+        if is_postgres():
+            id_filter = "id = ANY(%s)"
+            params = (lead_ids,)
+        else:
+            placeholders = ",".join("?" for _ in lead_ids)
+            id_filter = f"id IN ({placeholders})"
+            params = tuple(lead_ids)
+
+        if include_historical:
+            where = f"WHERE {id_filter}"
+        else:
+            where = f"WHERE {id_filter} AND record_type NOT IN ('demo', 'sample')"
     else:
-        where = f"WHERE {live_qualified_filter}"
+        if include_historical and scope_clean == "all":
+            # Internal test/system debug bypass only
+            where = ""
+        elif scope_clean == "unexported":
+            # Prevent duplicate exports: only genuine leads with is_exported = 0
+            where = f"WHERE {live_qualified_filter} AND is_exported = 0"
+        elif scope_clean in ("processed", "all"):
+            # Normal organization export: all genuine live-discovered, processed, relevant leads
+            where = f"WHERE {live_qualified_filter}"
+        elif scope_clean == "high_medium":
+            where = f"WHERE {live_qualified_filter} AND priority IN ('High', 'Medium')"
+        elif scope_clean == "high_priority":
+            where = f"WHERE {live_qualified_filter} AND priority = 'High'"
+        elif scope_clean == "relevant":
+            where = f"WHERE {live_qualified_filter}"
+        else:
+            where = f"WHERE {live_qualified_filter}"
 
     with get_connection() as conn:
-        df = pd.read_sql_query(f"SELECT * FROM leads {where} ORDER BY id ASC", conn)
-        return df
+        cursor = conn.cursor()
+        if params is not None:
+            cursor.execute(f"SELECT * FROM leads {where} ORDER BY id ASC", params)
+        else:
+            cursor.execute(f"SELECT * FROM leads {where} ORDER BY id ASC")
+        rows = cursor.fetchall()
+        if not rows:
+            cursor.execute("SELECT * FROM leads WHERE 1=0")
+            colnames = [desc[0] for desc in cursor.description]
+            return pd.DataFrame(columns=colnames)
+        return pd.DataFrame([dict(r) for r in rows])
 
 
 def save_discovery_staging_batch(candidates: List[Dict[str, Any]]) -> None:
-    """Overwrites discovery_staging with the current batch of discovered candidates."""
+    """Overwrites discovery_staging with the current batch of discovered candidates. Only genuine live discoveries are staged."""
     init_database()
     param_char = "%s" if is_postgres() else "?"
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM discovery_staging")
         for cand in candidates:
+            # Guardrail: Never stage static demonstration benchmarks or sample records
+            if not cand.get("is_live_discovery") or cand.get("record_type") in ("demo", "sample") or cand.get("verification_status") == "demo":
+                continue
+
             breakdown_str = json.dumps(cand.get("score_breakdown", {})) if isinstance(cand.get("score_breakdown"), dict) else str(cand.get("score_breakdown") or "")
             explanation_str = json.dumps(cand.get("score_explanation", {})) if isinstance(cand.get("score_explanation"), dict) else str(cand.get("score_explanation") or "")
             live_val = 1 if cand.get("is_live_discovery") else 0
@@ -968,11 +1207,13 @@ def save_discovery_staging_batch(candidates: List[Dict[str, Any]]) -> None:
 
 
 def get_discovery_staging_batch() -> List[Dict[str, Any]]:
-    """Retrieves all candidates currently staged in discovery_staging with live deduplication checking."""
+    """Retrieves all genuine live candidates currently staged in discovery_staging with live deduplication checking."""
     init_database()
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM discovery_staging ORDER BY id ASC")
+        cursor.execute(
+            "SELECT * FROM discovery_staging WHERE is_live_discovery = 1 AND record_type NOT IN ('demo', 'sample') ORDER BY id ASC"
+        )
         rows = cursor.fetchall()
         candidates = []
         for r in rows:
@@ -1026,6 +1267,16 @@ def save_staged_batch_to_pipeline(candidates: Optional[List[Dict[str, Any]]] = N
         b_name = cand.get("business_name", "").strip()
         req = cand.get("requirement", "").strip()
         if not b_name or not req:
+            continue
+
+        # Guardrail (Requirement B.2): Do not save static benchmarks, demo records, sample records or unqualified records as genuine leads
+        if (
+            not cand.get("is_live_discovery")
+            or cand.get("record_type") in ("demo", "sample")
+            or cand.get("verification_status") == "demo"
+            or str(cand.get("relevance", "")).strip().lower() in ("not relevant", "unqualified")
+            or str(cand.get("buying_intent", "")).strip().lower() in ("unqualified",)
+        ):
             continue
 
         # Check if already exists in leads

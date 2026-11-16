@@ -412,13 +412,13 @@ export const LeadDetailModal: React.FC<LeadDetailModalProps> = ({
                   >
                     {lead.buying_intent || 'Unclear'} Intent
                   </span>
-                  {lead.is_exported === 1 ? (
+                  {Number(lead.is_exported) === 1 ? (
                     <span className="badge badge-exported badge-lg">
                       <CheckCircle2 size={13} /> Exported
                     </span>
                   ) : (
                     <span className="badge badge-not-exported badge-lg">
-                      <Clock size={13} /> Not Yet Exported
+                      <Clock size={13} /> Not Exported
                     </span>
                   )}
                 </div>
